@@ -1,0 +1,226 @@
+@page "/ai-assistant"
+@rendermode InteractiveServer
+@implements IDisposable
+
+@using System.Net
+@using System.Text.Json
+@using JobPilot.Web.Models.Agent
+@inject IHttpClientFactory HttpClientFactory
+@inject IJSRuntime JS
+
+<PageTitle>JobPilot AI Assistant</PageTitle>
+
+<div class="page-intro">
+    <h2>JobPilot AI Assistant</h2>
+    <p>Ask about a job, compare it with your profile, or draft a tailored resume.</p>
+</div>
+
+<section class="card chat-panel" aria-labelledby="chat-heading">
+    <header class="chat-header">
+        <div class="chat-heading">
+            <h3 id="chat-heading">Conversation</h3>
+            <span class="provider-label">Ollama / Local AI</span>
+        </div>
+        <button class="btn btn-outline-primary" type="button" @onclick="ClearChat"
+                disabled="@(isSending || !HasChatState)">Clear Chat</button>
+    </header>
+
+    <div class="conversation" role="log" aria-label="Chat messages" tabindex="0" @ref="conversation">
+        @if (messages.Count == 0)
+        {
+            <div class="chat-empty">
+                <h4>Try an example prompt</h4>
+                <p class="text-muted">Add a job description for a match analysis or resume draft.</p>
+                <div class="actions example-prompts">
+                    @foreach (var prompt in ExamplePrompts)
+                    {
+                        <button class="btn btn-outline-primary" type="button"
+                                @onclick="() => SelectPromptAsync(prompt)">@prompt</button>
+                    }
+                </div>
+            </div>
+        }
+
+        @foreach (var message in messages)
+        {
+            var isUser = message.Role == "user";
+            <article @key="message" class="chat-message @(isUser ? "user-message" : "assistant-message")">
+                <h4>@(isUser ? "You" : "Assistant")</h4>
+                <p class="message-content">@message.Content</p>
+
+                @if (message.Tools.Count > 0)
+                {
+                    <div class="tool-results">
+                        <p>Executed tools</p>
+                        @foreach (var tool in message.Tools)
+                        {
+                            <details class="tool-result">
+                                <summary><code>@tool.ToolName</code></summary>
+                                <pre><code>@JsonSerializer.Serialize(tool.Result, IndentedJson)</code></pre>
+                            </details>
+                        }
+                    </div>
+                }
+            </article>
+        }
+    </div>
+
+    <form class="chat-composer" @onsubmit="SendMessageAsync" @onsubmit:preventDefault>
+        <div>
+            <label class="form-label" for="assistant-job-description">
+                Job Description <span class="text-muted">(optional)</span>
+            </label>
+            <textarea id="assistant-job-description" class="form-control" rows="3"
+                      placeholder="Paste the job listing" @bind="jobDescription" @bind:event="oninput"
+                      disabled="@isSending"></textarea>
+        </div>
+        <div>
+            <label class="form-label" for="assistant-message">User Message</label>
+            <textarea id="assistant-message" class="form-control" rows="2" @ref="messageInput"
+                      placeholder="Ask the assistant a question" @bind="userMessage" @bind:event="oninput"
+                      disabled="@isSending" required></textarea>
+        </div>
+        <div class="actions">
+            <button class="btn btn-primary" type="submit" disabled="@isSending">Send Message</button>
+            <span class="chat-status text-muted" role="status">
+                @if (isSending)
+                {
+                    <span class="ui-spinner" aria-hidden="true"></span>
+                    <span>Waiting for Ollama…</span>
+                }
+            </span>
+        </div>
+        @if (errorMessage is not null)
+        {
+            <div class="alert alert-danger" role="alert">@errorMessage</div>
+        }
+    </form>
+</section>
+
+@code {
+    private static readonly string[] ExamplePrompts =
+    [
+        "How well does my profile match this job?",
+        "Draft a resume tailored to this job.",
+        "How can I prepare for an interview?"
+    ];
+
+    private static readonly JsonSerializerOptions IndentedJson = new() { WriteIndented = true };
+    private readonly List<ChatMessage> messages = [];
+    private readonly CancellationTokenSource pageLifetime = new();
+    private ElementReference conversation;
+    private ElementReference messageInput;
+    private string jobDescription = "";
+    private string userMessage = "";
+    private string? errorMessage;
+    private bool isSending;
+    private bool scrollPending;
+
+    private bool HasChatState => messages.Count > 0 || jobDescription.Length > 0 ||
+        userMessage.Length > 0 || errorMessage is not null;
+
+    private async Task SelectPromptAsync(string prompt)
+    {
+        userMessage = prompt;
+        errorMessage = null;
+        await messageInput.FocusAsync();
+    }
+
+    private async Task SendMessageAsync()
+    {
+        if (isSending)
+            return;
+
+        var message = userMessage.Trim();
+        if (message.Length == 0)
+        {
+            errorMessage = "Enter a message to continue.";
+            await messageInput.FocusAsync();
+            return;
+        }
+
+        var description = string.IsNullOrWhiteSpace(jobDescription) ? null : jobDescription.Trim();
+        var cancellationToken = pageLifetime.Token;
+        isSending = true;
+        errorMessage = null;
+        userMessage = "";
+        messages.Add(new ChatMessage("user", message, []));
+        scrollPending = true;
+
+        try
+        {
+            using var client = HttpClientFactory.CreateClient("JobPilotApi");
+            using var response = await client.PostAsJsonAsync(
+                "api/agent/chat", new AgentChatRequest(message, description), cancellationToken);
+
+            await response.EnsureJobPilotSuccessAsync(cancellationToken);
+
+            var result = await response.Content.ReadFromJsonAsync<AgentChatResponse>(cancellationToken);
+            if (result is null || string.IsNullOrWhiteSpace(result.Message) || result.ExecutedTools is null ||
+                result.ExecutedTools.Any(tool => tool is null || string.IsNullOrWhiteSpace(tool.ToolName)))
+            {
+                throw new JsonException();
+            }
+
+            messages.Add(new ChatMessage("assistant", result.Message, result.ExecutedTools));
+            scrollPending = true;
+        }
+        catch (HttpRequestException ex)
+        {
+            errorMessage = ex.StatusCode switch
+            {
+                HttpStatusCode.BadGateway => "The JobPilot API could not get a response from Ollama. Check Ollama and try again.",
+                null => "Could not reach the JobPilot API. Check that it is running and try again.",
+                _ => ex.Message
+            };
+        }
+        catch (JsonException)
+        {
+            errorMessage = "The JobPilot API returned an invalid chat response. Please try again.";
+        }
+        catch (OperationCanceledException)
+        {
+            if (!cancellationToken.IsCancellationRequested)
+                errorMessage = "The request timed out while waiting for Ollama. Please try again.";
+        }
+        finally
+        {
+            isSending = false;
+            if (errorMessage is not null)
+                userMessage = message;
+        }
+    }
+
+    private void ClearChat()
+    {
+        if (isSending)
+            return;
+
+        messages.Clear();
+        jobDescription = "";
+        userMessage = "";
+        errorMessage = null;
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!scrollPending)
+            return;
+
+        scrollPending = false;
+        try
+        {
+            await JS.InvokeVoidAsync("jobPilot.scrollToBottom", conversation);
+        }
+        catch (JSDisconnectedException)
+        {
+            // The chat is no longer connected to a browser.
+        }
+    }
+
+    public void Dispose()
+    {
+        pageLifetime.Cancel();
+        pageLifetime.Dispose();
+    }
+}

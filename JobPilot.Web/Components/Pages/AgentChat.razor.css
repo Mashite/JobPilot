@@ -1,0 +1,134 @@
+.chat-panel {
+    max-width: 65rem;
+}
+
+.chat-header, .chat-heading {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: .75rem;
+}
+
+.chat-header {
+    justify-content: space-between;
+    padding: 1rem var(--card-padding);
+}
+
+.chat-heading h3 {
+    margin: 0;
+}
+
+.provider-label {
+    padding: .2rem .65rem;
+    border-radius: 999px;
+    color: var(--primary-strong);
+    background: var(--primary-soft);
+    font-size: .8rem;
+    font-weight: 650;
+}
+
+.conversation {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+    height: clamp(15rem, 42vh, 30rem);
+    padding: var(--card-padding);
+    overflow-y: auto;
+    border-block: 1px solid var(--border);
+    background: var(--canvas);
+}
+
+.conversation:focus-visible {
+    outline-offset: -3px;
+}
+
+.chat-empty {
+    margin: auto;
+    padding: .5rem;
+    text-align: center;
+}
+
+.example-prompts {
+    justify-content: center;
+}
+
+.chat-message {
+    width: fit-content;
+    max-width: 85%;
+    min-width: 0;
+    padding: .85rem 1rem;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    overflow-wrap: anywhere;
+}
+
+.user-message {
+    align-self: end;
+    border-color: transparent;
+    border-end-end-radius: .25rem;
+    background: var(--primary-soft);
+}
+
+.assistant-message {
+    align-self: start;
+    border-end-start-radius: .25rem;
+    background: var(--surface);
+}
+
+.chat-message h4, .tool-results > p {
+    margin-block-end: .35rem;
+    color: var(--text-secondary);
+    font-size: .85rem;
+}
+
+.message-content {
+    margin: 0;
+    white-space: pre-wrap;
+}
+
+.tool-results {
+    display: grid;
+    gap: .4rem;
+    margin-block-start: .85rem;
+}
+
+.tool-result {
+    min-width: 0;
+    border: 1px solid var(--border);
+    border-radius: .625rem;
+    background: var(--canvas);
+}
+
+.tool-result summary {
+    padding: .45rem .65rem;
+    cursor: pointer;
+    color: var(--primary-strong);
+}
+
+.tool-result pre {
+    margin: 0;
+    padding: .65rem;
+    border-block-start: 1px solid var(--border);
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    font-size: .825rem;
+}
+
+.chat-composer {
+    display: grid;
+    gap: .85rem;
+    padding: var(--card-padding);
+}
+
+.chat-status {
+    display: inline-flex;
+    align-items: center;
+    gap: .5rem;
+    font-size: .9rem;
+}
+
+@media (max-width: 40rem) {
+    .chat-message {
+        max-width: 100%;
+    }
+}

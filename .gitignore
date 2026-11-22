@@ -1,0 +1,30 @@
+# Local settings, credentials, and personal data
+.env
+.env.*
+!.env.example
+appsettings.*.json
+!appsettings.example.json
+secrets.json
+.aws/
+*.pfx
+*.p12
+*.pem
+*.key
+*.pubxml.user
+*.publishsettings
+/JobPilot.Api/Data/candidate-profile.json
+JobPilotResume*.docx
+
+# .NET build output and Visual Studio state
+[Bb]in/
+[Oo]bj/
+.vs/
+*.user
+*.suo
+TestResults/
+*.trx
+
+# Local logs and generated Graphify files
+*.log
+/.graphify-venv/
+/graphify-out/

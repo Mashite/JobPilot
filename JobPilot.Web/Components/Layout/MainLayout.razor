@@ -1,0 +1,127 @@
+@inherits LayoutComponentBase
+@implements IDisposable
+@inject NavigationManager Navigation
+
+<div class="app-shell">
+    <a class="skip-link" href="@SkipTarget" @onclick="FocusMain" @onclick:preventDefault="true">Skip to main content</a>
+
+    <header class="topbar">
+        <div class="topbar-inner">
+            <button class="menu-toggle" type="button" @ref="menuToggle"
+                    aria-controls="primary-navigation" aria-expanded="@(navigationOpen ? "true" : "false")"
+                    aria-label="@(navigationOpen ? "Close navigation" : "Open navigation")"
+                    @onclick="() => navigationOpen = !navigationOpen" @onkeydown="HandleNavigationKey">
+                <span class="menu-icon" aria-hidden="true"></span>
+            </button>
+            <h1 id="current-page-title" tabindex="-1">@PageTitle</h1>
+        </div>
+    </header>
+
+    <aside class="sidebar @(navigationOpen ? "sidebar-open" : null)" id="primary-navigation"
+           @onkeydown="HandleNavigationKey">
+        <a class="brand" href="" @onclick="CloseNavigationFromLink">
+            <span class="brand-mark" aria-hidden="true"><span></span></span>
+            <span>JobPilot</span>
+        </a>
+
+        <nav class="sidebar-nav" aria-label="Main navigation">
+            <NavLink href="" Match="NavLinkMatch.All" class="sidebar-link"
+                     aria-current="@CurrentPage("")" @onclick="CloseNavigationFromLink">
+                <span class="app-icon icon-dashboard" aria-hidden="true"></span>
+                Dashboard
+            </NavLink>
+            <NavLink href="jobs" class="sidebar-link"
+                     aria-current="@CurrentPage("jobs")" @onclick="CloseNavigationFromLink">
+                <span class="app-icon icon-analyzer" aria-hidden="true"></span>
+                Job Analyzer
+            </NavLink>
+            <NavLink href="ai-assistant" class="sidebar-link"
+                     aria-current="@CurrentPage("ai-assistant")" @onclick="CloseNavigationFromLink">
+                <span class="app-icon icon-chat" aria-hidden="true"></span>
+                AI Assistant
+            </NavLink>
+            <NavLink href="saved-jobs" class="@SavedJobsLinkClass"
+                     aria-current="@CurrentPage("saved-jobs")" @onclick="CloseNavigationFromLink">
+                <span class="app-icon icon-saved" aria-hidden="true"></span>
+                Saved Jobs
+            </NavLink>
+        </nav>
+    </aside>
+
+    <main class="app-main" id="main-content" tabindex="-1" @ref="mainContent">
+        @Body
+    </main>
+</div>
+
+<div id="blazor-error-ui" role="alert" data-nosnippet>
+    An unhandled error has occurred.
+    <a href="@Navigation.Uri" class="reload">Reload</a>
+    <button type="button" class="dismiss" aria-label="Dismiss error">×</button>
+</div>
+
+@code {
+    private bool navigationOpen;
+    private ElementReference menuToggle;
+    private ElementReference mainContent;
+
+    private string SkipTarget => $"{Navigation.Uri.Split('#')[0]}#main-content";
+
+    private string PagePath => Navigation.ToBaseRelativePath(Navigation.Uri)
+        .Split('?', '#')[0].Trim('/').ToLowerInvariant();
+
+    private bool IsApplicationWorkspace => PagePath.StartsWith("applications/", StringComparison.Ordinal) &&
+        int.TryParse(PagePath.AsSpan("applications/".Length), out _);
+
+    private string PageTitle => PagePath switch
+    {
+        "" => "Dashboard",
+        "jobs" => "Job Analyzer",
+        "ai-assistant" => "AI Assistant",
+        "saved-jobs" => "Saved Jobs",
+        "error" => "Error",
+        _ => IsApplicationWorkspace ? "Application Workspace" : "Page not found"
+    };
+
+    private string SavedJobsLinkClass => IsApplicationWorkspace ? "sidebar-link active" : "sidebar-link";
+
+    protected override void OnInitialized() => Navigation.LocationChanged += HandleLocationChanged;
+
+    private string? CurrentPage(string path) => PagePath == path ? "page" : null;
+
+    private async Task FocusMain()
+    {
+        CloseNavigation();
+        await mainContent.FocusAsync();
+    }
+
+    private void CloseNavigation() => navigationOpen = false;
+
+    private async Task CloseNavigationFromLink()
+    {
+        if (!navigationOpen)
+            return;
+
+        CloseNavigation();
+        await menuToggle.FocusAsync();
+    }
+
+    private void HandleLocationChanged(object? sender, LocationChangedEventArgs args)
+    {
+        _ = InvokeAsync(() =>
+        {
+            CloseNavigation();
+            StateHasChanged();
+        });
+    }
+
+    private async Task HandleNavigationKey(KeyboardEventArgs args)
+    {
+        if (navigationOpen && args.Key == "Escape")
+        {
+            CloseNavigation();
+            await menuToggle.FocusAsync();
+        }
+    }
+
+    public void Dispose() => Navigation.LocationChanged -= HandleLocationChanged;
+}

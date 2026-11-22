@@ -1,0 +1,12 @@
+# Local tooling and .NET build output
+.graphify-venv/
+.vs/
+bin/
+obj/
+*.user
+
+# Local configuration and secrets
+.env
+.env.*
+appsettings*.json
+**/Properties/launchSettings.json

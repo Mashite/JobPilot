@@ -1,0 +1,299 @@
+@using JobPilot.Web.Models
+
+@{
+    var skills = Resume.TechnicalSkills.Where(HasText).ToList();
+    var experienceEntries = Resume.Experiences.Where(HasExperienceContent).ToList();
+    var projects = Resume.Projects.Where(HasText).ToList();
+    var education = Resume.Education.Where(HasText).ToList();
+    var hasIdentity = HasText(Resume.FullName) || HasText(Resume.ProfessionalTitle);
+    var hasSummary = HasText(Resume.ProfessionalSummary);
+    var hasContent = hasIdentity || hasSummary || skills.Count > 0 || experienceEntries.Count > 0 ||
+        projects.Count > 0 || education.Count > 0;
+}
+
+<section class="resume-editor" aria-label="Resume editor">
+    <header class="resume-editor-header">
+        <div>
+            <h3 tabindex="-1" @ref="editorHeading">Resume Editor</h3>
+            <p class="text-muted">Review the live preview, then save your changes or download Word.</p>
+        </div>
+        <button type="button" class="btn btn-outline-primary preview-jump" @onclick="FocusPreview">
+            Jump to preview <span aria-hidden="true">↓</span>
+        </button>
+    </header>
+
+    <div class="resume-editor-layout">
+        <div class="card resume-fields">
+            <div class="card-body">
+                <section class="resume-form-section">
+                    <h4>Contact information</h4>
+                    <div class="editor-grid">
+                        <label class="form-field">
+                            <span class="form-label">Full Name</span>
+                            <input class="form-control" autocomplete="name" required @ref="fullNameInput"
+                                   aria-invalid="@(!HasText(Resume.FullName) ? "true" : null)"
+                                   aria-describedby="@(!HasText(Resume.FullName) ? nameErrorId : null)"
+                                   @bind="Resume.FullName" @bind:event="oninput" @bind:after="NotifyChanged" />
+                        </label>
+                        <label class="form-field">
+                            <span class="form-label">Professional Title</span>
+                            <input class="form-control"
+                                   @bind="Resume.ProfessionalTitle" @bind:event="oninput" @bind:after="NotifyChanged" />
+                        </label>
+                    </div>
+                    @if (!HasText(Resume.FullName))
+                    {
+                        <p class="validation-message" id="@nameErrorId">Enter a full name to save or download this resume.</p>
+                    }
+                </section>
+
+                <section class="resume-form-section">
+                    <h4 id="@summaryLabelId">Professional Summary</h4>
+                    <textarea class="form-control" rows="5" aria-labelledby="@summaryLabelId"
+                              @bind="Resume.ProfessionalSummary" @bind:event="oninput" @bind:after="NotifyChanged"></textarea>
+                </section>
+
+                <section class="resume-form-section">
+                    <h4>Technical Skills</h4>
+                    @if (Resume.TechnicalSkills.Count == 0)
+                    {
+                        <p class="text-muted">No technical skills are included in this draft.</p>
+                    }
+                    else
+                    {
+                        <div class="editor-grid">
+                            @for (var i = 0; i < Resume.TechnicalSkills.Count; i++)
+                            {
+                                var index = i;
+                                <input class="form-control" aria-label="@($"Technical skill {index + 1}")"
+                                       @bind="Resume.TechnicalSkills[index]" @bind:event="oninput" @bind:after="NotifyChanged" />
+                            }
+                        </div>
+                    }
+                </section>
+
+                <section class="resume-form-section">
+                    <h4>Work Experience</h4>
+                    @if (Resume.Experiences.Count == 0)
+                    {
+                        <p class="text-muted">No work experience is included in this draft.</p>
+                    }
+                    else
+                    {
+                        <div class="editor-stack">
+                            @for (var i = 0; i < Resume.Experiences.Count; i++)
+                            {
+                                var experience = Resume.Experiences[i];
+
+                                <fieldset class="experience-card">
+                                    <legend>Experience @(i + 1)</legend>
+                                    <div class="editor-grid">
+                                        <label class="form-field">
+                                            <span class="form-label">Position</span>
+                                            <input class="form-control" @bind="experience.Position" @bind:event="oninput" @bind:after="NotifyChanged" />
+                                        </label>
+                                        <label class="form-field">
+                                            <span class="form-label">Company</span>
+                                            <input class="form-control" @bind="experience.Company" @bind:event="oninput" @bind:after="NotifyChanged" />
+                                        </label>
+                                        <label class="form-field">
+                                            <span class="form-label">Start Date</span>
+                                            <input class="form-control" @bind="experience.StartDate" @bind:event="oninput" @bind:after="NotifyChanged" />
+                                        </label>
+                                        <label class="form-field">
+                                            <span class="form-label">End Date</span>
+                                            <input class="form-control" @bind="experience.EndDate" @bind:event="oninput" @bind:after="NotifyChanged" />
+                                        </label>
+                                    </div>
+
+                                    @if (experience.Highlights.Count > 0)
+                                    {
+                                        <div class="highlight-fields">
+                                            <h5>Highlights</h5>
+                                            <div class="editor-stack">
+                                                @for (var highlightIndex = 0; highlightIndex < experience.Highlights.Count; highlightIndex++)
+                                                {
+                                                    var index = highlightIndex;
+                                                    <textarea class="form-control" rows="2" aria-label="@($"Highlight {index + 1}")"
+                                                              @bind="experience.Highlights[index]" @bind:event="oninput" @bind:after="NotifyChanged"></textarea>
+                                                }
+                                            </div>
+                                        </div>
+                                    }
+                                </fieldset>
+                            }
+                        </div>
+                    }
+                </section>
+
+                @if (Resume.Projects.Count > 0)
+                {
+                    <section class="resume-form-section">
+                        <h4>Projects</h4>
+                        <div class="editor-stack">
+                            @for (var i = 0; i < Resume.Projects.Count; i++)
+                            {
+                                var index = i;
+                                <input class="form-control" aria-label="@($"Project {index + 1}")"
+                                       @bind="Resume.Projects[index]" @bind:event="oninput" @bind:after="NotifyChanged" />
+                            }
+                        </div>
+                    </section>
+                }
+
+                @if (Resume.Education.Count > 0)
+                {
+                    <section class="resume-form-section">
+                        <h4>Education</h4>
+                        <div class="editor-stack">
+                            @for (var i = 0; i < Resume.Education.Count; i++)
+                            {
+                                var index = i;
+                                <input class="form-control" aria-label="@($"Education entry {index + 1}")"
+                                       @bind="Resume.Education[index]" @bind:event="oninput" @bind:after="NotifyChanged" />
+                            }
+                        </div>
+                    </section>
+                }
+            </div>
+        </div>
+
+        <section class="card resume-preview" aria-label="Resume preview">
+            <header class="preview-header">
+                <div>
+                    <h4 tabindex="-1" @ref="previewHeading">Live preview</h4>
+                    <p class="text-muted">US Letter layout</p>
+                </div>
+                <button type="button" class="btn btn-outline-primary preview-jump" @onclick="FocusEditor">Back to editor</button>
+            </header>
+
+            <div class="preview-scroll" role="region" aria-label="Resume document" tabindex="0">
+                <div class="preview-page-frame">
+                    <article class="resume-paper" aria-label="Resume">
+                        @if (!hasContent)
+                        {
+                            <p class="preview-empty text-muted">Enter resume details to see the document here.</p>
+                        }
+
+                        @if (hasIdentity)
+                        {
+                            <header class="paper-identity">
+                                @if (HasText(Resume.FullName))
+                                {
+                                    <h5>@Resume.FullName</h5>
+                                }
+                                @if (HasText(Resume.ProfessionalTitle))
+                                {
+                                    <p>@Resume.ProfessionalTitle</p>
+                                }
+                            </header>
+                        }
+
+                        @if (hasSummary)
+                        {
+                            <section class="paper-section">
+                                <h6>Professional Summary</h6>
+                                <p>@Resume.ProfessionalSummary</p>
+                            </section>
+                        }
+
+                        @if (skills.Count > 0)
+                        {
+                            <section class="paper-section">
+                                <h6>Technical Skills</h6>
+                                <p>@string.Join(" | ", skills)</p>
+                            </section>
+                        }
+
+                        @if (experienceEntries.Count > 0)
+                        {
+                            <section class="paper-section">
+                                <h6>Professional Experience</h6>
+                                @foreach (var experience in experienceEntries)
+                                {
+                                    var role = JoinPresent(" — ", experience.Position, experience.Company);
+                                    var dates = JoinPresent(" – ", experience.StartDate, experience.EndDate);
+                                    var highlights = experience.Highlights.Where(HasText).ToList();
+
+                                    <div class="paper-experience">
+                                        @if (HasText(role))
+                                        {
+                                            <p><strong>@role</strong></p>
+                                        }
+                                        @if (HasText(dates))
+                                        {
+                                            <p class="paper-dates">@dates</p>
+                                        }
+                                        @if (highlights.Count > 0)
+                                        {
+                                            <ul>
+                                                @foreach (var highlight in highlights)
+                                                {
+                                                    <li>@highlight</li>
+                                                }
+                                            </ul>
+                                        }
+                                    </div>
+                                }
+                            </section>
+                        }
+
+                        @if (projects.Count > 0)
+                        {
+                            <section class="paper-section">
+                                <h6>Projects</h6>
+                                <ul>
+                                    @foreach (var project in projects)
+                                    {
+                                        <li>@project</li>
+                                    }
+                                </ul>
+                            </section>
+                        }
+
+                        @if (education.Count > 0)
+                        {
+                            <section class="paper-section">
+                                <h6>Education</h6>
+                                @foreach (var entry in education)
+                                {
+                                    <p>@entry</p>
+                                }
+                            </section>
+                        }
+                    </article>
+                </div>
+            </div>
+        </section>
+    </div>
+</section>
+
+@code {
+    [Parameter, EditorRequired]
+    public GeneratedResume Resume { get; set; } = default!;
+
+    [Parameter]
+    public EventCallback ResumeChanged { get; set; }
+
+    private readonly string summaryLabelId = $"resume-summary-{Guid.NewGuid():N}";
+    private readonly string nameErrorId = $"resume-name-error-{Guid.NewGuid():N}";
+    private ElementReference fullNameInput;
+    private ElementReference editorHeading;
+    private ElementReference previewHeading;
+
+    private async Task FocusEditor() => await editorHeading.FocusAsync();
+    private async Task FocusPreview() => await previewHeading.FocusAsync();
+
+    private Task NotifyChanged() => ResumeChanged.InvokeAsync();
+
+    public ValueTask FocusFullNameAsync() => fullNameInput.FocusAsync();
+
+    private static bool HasText(string? value) => !string.IsNullOrWhiteSpace(value);
+
+    private static string JoinPresent(string separator, params string[] values) =>
+        string.Join(separator, values.Where(HasText));
+
+    private static bool HasExperienceContent(ResumeExperience experience) =>
+        HasText(experience.Position) || HasText(experience.Company) ||
+        HasText(experience.StartDate) || HasText(experience.EndDate) || experience.Highlights.Any(HasText);
+}

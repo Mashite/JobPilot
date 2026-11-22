@@ -1,0 +1,252 @@
+.app-shell {
+    --sidebar-width: 15rem;
+    --topbar-height: 4.25rem;
+    --main-padding: clamp(1.25rem, 4vw, 3rem);
+    min-height: 100vh;
+    padding-inline-start: var(--sidebar-width);
+}
+
+.topbar {
+    position: sticky;
+    inset-block-start: 0;
+    z-index: 10;
+    min-height: var(--topbar-height);
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+}
+
+.topbar-inner {
+    display: flex;
+    align-items: center;
+    gap: .875rem;
+    min-height: var(--topbar-height);
+    max-width: 83rem;
+    margin-inline: auto;
+    padding-inline: var(--main-padding);
+}
+
+.topbar h1 {
+    margin: 0;
+    font-size: 1.025rem;
+    line-height: 1.5;
+    font-weight: 680;
+}
+
+.topbar h1:focus {
+    outline: none;
+}
+
+.sidebar {
+    position: fixed;
+    inset: 0 auto 0 0;
+    z-index: 20;
+    width: var(--sidebar-width);
+    padding: 1.125rem 1rem;
+    overflow-y: auto;
+    background: var(--surface);
+    border-inline-end: 1px solid var(--border);
+}
+
+.brand {
+    display: flex;
+    align-items: center;
+    gap: .75rem;
+    min-height: 2.5rem;
+    margin-inline: .375rem;
+    color: var(--text);
+    font-size: 1.375rem;
+    font-weight: 760;
+    letter-spacing: -.045em;
+    text-decoration: none;
+}
+
+.brand:hover {
+    color: var(--text);
+    text-decoration: none;
+}
+
+.brand-mark {
+    display: grid;
+    place-items: center;
+    flex: 0 0 2.375rem;
+    height: 2.375rem;
+    color: #fff;
+    background: linear-gradient(145deg, #6963f5, var(--primary));
+    border-radius: .75rem;
+    box-shadow: 0 3px 8px #4f46e536;
+}
+
+.brand-mark span {
+    display: block;
+    width: 1.1rem;
+    height: 1.1rem;
+    background: currentColor;
+    clip-path: polygon(0 44%, 100% 0, 59% 100%, 43% 59%);
+}
+
+.sidebar-nav {
+    display: grid;
+    gap: .375rem;
+    margin-block-start: 2.625rem;
+}
+
+.sidebar-nav ::deep .sidebar-link {
+    display: flex;
+    align-items: center;
+    gap: .75rem;
+    min-height: 2.75rem;
+    padding: .65rem .75rem;
+    border-radius: .625rem;
+    color: var(--text-secondary);
+    font-size: .925rem;
+    font-weight: 600;
+    text-decoration: none;
+}
+
+.sidebar-nav ::deep .sidebar-link:hover {
+    color: var(--text);
+    background: var(--canvas);
+}
+
+.sidebar-nav ::deep .sidebar-link.active {
+    color: var(--primary-strong);
+    background: var(--primary-soft);
+}
+
+.icon-chat::before {
+    content: "";
+    position: absolute;
+    inset: 2px 1px 4px;
+    border: 2px solid currentColor;
+    border-radius: 4px;
+}
+
+.icon-chat::after {
+    content: "";
+    position: absolute;
+    inset: auto auto 2px 4px;
+    width: 5px;
+    height: 5px;
+    border-inline-start: 2px solid currentColor;
+    border-block-end: 2px solid currentColor;
+    background: var(--surface);
+    transform: skewY(-35deg);
+}
+
+.sidebar-nav ::deep .sidebar-link:hover .icon-chat::after {
+    background: var(--canvas);
+}
+
+.sidebar-nav ::deep .sidebar-link.active .icon-chat::after {
+    background: var(--primary-soft);
+}
+
+.app-main {
+    width: 100%;
+    max-width: 83rem;
+    margin-inline: auto;
+    padding: clamp(1.5rem, 4vw, 3rem) var(--main-padding) 4rem;
+    scroll-margin-block-start: var(--topbar-height);
+}
+
+.menu-toggle {
+    display: none;
+    width: var(--control-height);
+    height: var(--control-height);
+    place-items: center;
+    padding: 0;
+    color: var(--text);
+    background: var(--surface);
+    border: 1px solid var(--control-border);
+    border-radius: .625rem;
+}
+
+.menu-icon {
+    width: 1rem;
+    height: .75rem;
+    border-block: 2px solid currentColor;
+    background: linear-gradient(currentColor, currentColor) center / 100% 2px no-repeat;
+}
+
+.skip-link {
+    position: fixed;
+    z-index: 30;
+    inset: .5rem auto auto .5rem;
+    padding: .7rem 1rem;
+    border-radius: .625rem;
+    color: #fff;
+    background: var(--primary-strong);
+    transform: translateY(-160%);
+}
+
+.skip-link:focus {
+    transform: none;
+    color: #fff;
+    outline: 3px solid var(--primary);
+    outline-offset: 3px;
+}
+
+#blazor-error-ui {
+    display: none;
+    position: fixed;
+    inset: auto 1rem 1rem;
+    z-index: 1000;
+    max-width: 40rem;
+    margin-inline: auto;
+    padding: 1rem 3rem 1rem 1.25rem;
+    color: var(--danger-text);
+    background: var(--danger-soft);
+    border: 1px solid #fecaca;
+    border-radius: .75rem;
+    box-shadow: var(--shadow);
+}
+
+#blazor-error-ui .reload {
+    margin-inline-start: .5rem;
+}
+
+#blazor-error-ui .dismiss {
+    position: absolute;
+    inset: .55rem .55rem auto auto;
+    width: 2.25rem;
+    height: 2.25rem;
+    border: 0;
+    border-radius: .375rem;
+    color: inherit;
+    background: transparent;
+    font-size: 1.25rem;
+}
+
+@media (max-width: 47.99rem) {
+    .app-shell {
+        --topbar-height: 3.75rem;
+        padding-inline-start: 0;
+    }
+
+    .menu-toggle {
+        display: grid;
+    }
+
+    .sidebar {
+        position: static;
+        display: none;
+        width: auto;
+        padding: 1rem var(--main-padding);
+        border-inline-end: 0;
+        border-bottom: 1px solid var(--border);
+        box-shadow: var(--shadow);
+    }
+
+    .sidebar-open {
+        display: block;
+    }
+
+    .sidebar-nav {
+        margin-block-start: .75rem;
+    }
+}
+
+@media (forced-colors: active) {
+    .sidebar-nav ::deep .sidebar-link.active { outline: 1px solid Highlight; outline-offset: -1px; }
+    .sidebar-nav ::deep .sidebar-link:focus-visible { outline: 3px solid Highlight; }
+}

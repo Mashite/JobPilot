@@ -1,0 +1,438 @@
+@page "/applications/{Id:int}"
+@rendermode InteractiveServer
+@implements IDisposable
+
+@using System.Net
+@using JobPilot.Web.Models
+@using JobPilot.Web.Components.Resume
+@inject IHttpClientFactory HttpClientFactory
+@inject IJSRuntime JS
+
+<PageTitle>Application Workspace - JobPilot</PageTitle>
+
+<div class="page-stack">
+    <div>
+        <a class="workspace-back" href="saved-jobs"><span aria-hidden="true">←</span> Saved Jobs</a>
+    </div>
+
+    @if (isLoading)
+    {
+        <div class="card">
+            <div class="card-body actions" role="status">
+                <span class="ui-spinner" aria-hidden="true"></span> Loading application...
+            </div>
+        </div>
+    }
+    else if (job is null)
+    {
+        <div class="alert alert-danger" role="alert">@loadError</div>
+    }
+    else
+    {
+        <header class="card workspace-header" aria-labelledby="workspace-job-title">
+            <div class="card-body workspace-summary">
+                <div>
+                    <h2 id="workspace-job-title">@job.JobTitle</h2>
+                    <p class="text-muted break-word">@job.CompanyName</p>
+                </div>
+
+                <dl class="workspace-facts">
+                    <div>
+                        <dt>Match score</dt>
+                        <dd><span class="score-badge">@(job.MatchScore is int score ? $"{score}%" : "Not analyzed")</span></dd>
+                    </div>
+                    <div>
+                        <dt>Status</dt>
+                        <dd><span class="status-badge" data-status="@job.Status.ToLowerInvariant()">@job.Status</span></dd>
+                    </div>
+                </dl>
+            </div>
+        </header>
+
+        <div class="card workspace-tabs" role="tablist" aria-label="Application workspace" @onkeydown="HandleTabKey">
+            @foreach (var tab in Tabs)
+            {
+                <button type="button" role="tab" id="@TabId(tab.Value)" aria-controls="@PanelId(tab.Value)"
+                        aria-selected="@(activeTab == tab.Value ? "true" : "false")"
+                        tabindex="@(activeTab == tab.Value ? 0 : -1)"
+                        @ref="tabButtons[(int)tab.Value]" @onclick="() => activeTab = tab.Value">
+                    @tab.Label
+                </button>
+            }
+        </div>
+
+        <section class="card workspace-tab-panel" role="tabpanel" id="@PanelId(WorkspaceTab.Job)"
+                 aria-labelledby="@TabId(WorkspaceTab.Job)" hidden="@(activeTab != WorkspaceTab.Job)" tabindex="0">
+            <div class="card-body">
+                <h3>Job Description</h3>
+                <p class="job-description">@job.JobDescription</p>
+            </div>
+        </section>
+
+        <section class="resume-region workspace-tab-panel" role="tabpanel" id="@PanelId(WorkspaceTab.Resume)"
+                 aria-labelledby="@TabId(WorkspaceTab.Resume)" hidden="@(activeTab != WorkspaceTab.Resume)" tabindex="0">
+            @if (resume is null)
+            {
+                <div class="card">
+                    <div class="card-body workspace-resume-empty">
+                        @if (resumeLoadError is not null)
+                        {
+                            <div class="alert alert-danger" role="alert">@resumeLoadError</div>
+                            <div class="actions actions-spaced">
+                                <button type="button" class="btn btn-outline-primary" disabled="@IsBusy" @onclick="RetryLoadResume">
+                                    @(pendingOperation == Operation.LoadResume ? "Loading..." : "Retry loading resume")
+                                </button>
+                            </div>
+                        }
+                        else
+                        {
+                            <h3>No resume has been saved yet</h3>
+                            <p class="text-muted">Generate a draft for this job, then edit and save it here.</p>
+                            <button type="button" class="btn btn-primary" disabled="@IsBusy" @onclick="GenerateResume">
+                                @if (pendingOperation == Operation.GenerateResume)
+                                {
+                                    <span class="ui-spinner" aria-hidden="true"></span>
+                                }
+                                @(pendingOperation == Operation.GenerateResume ? "Generating..." : "Generate Resume")
+                            </button>
+                        }
+                    </div>
+                </div>
+            }
+            else
+            {
+                <fieldset disabled="@IsBusy">
+                    <ResumeEditor Resume="resume" ResumeChanged="HandleResumeChanged" @ref="resumeEditor" />
+                </fieldset>
+
+                <div class="card resume-actions">
+                    <div class="card-body actions">
+                        <button type="button" class="btn btn-primary" disabled="@IsBusy" @onclick="SaveResume">
+                            @if (pendingOperation == Operation.SaveResume)
+                            {
+                                <span class="ui-spinner" aria-hidden="true"></span>
+                            }
+                            @(pendingOperation == Operation.SaveResume ? "Saving..." : "Save Resume")
+                        </button>
+                        <button type="button" class="btn btn-outline-primary" disabled="@IsBusy" @onclick="DownloadResume">
+                            @if (pendingOperation == Operation.DownloadResume)
+                            {
+                                <span class="ui-spinner" aria-hidden="true"></span>
+                            }
+                            @(pendingOperation == Operation.DownloadResume ? "Preparing download..." : "Download Word")
+                        </button>
+                    </div>
+                </div>
+            }
+
+            @if (feedbackTab == WorkspaceTab.Resume)
+            {
+                @if (errorMessage is not null)
+                {
+                    <div class="alert alert-danger" role="alert">@errorMessage</div>
+                }
+                @if (successMessage is not null)
+                {
+                    <div class="alert alert-success" role="status">@successMessage</div>
+                }
+            }
+        </section>
+
+        <section class="card workspace-tab-panel" role="tabpanel" id="@PanelId(WorkspaceTab.Application)"
+                 aria-labelledby="@TabId(WorkspaceTab.Application)" hidden="@(activeTab != WorkspaceTab.Application)" tabindex="0">
+            <div class="card-body">
+                <h3>Application status</h3>
+                <p class="text-muted">Changes are saved automatically.</p>
+
+                <div class="status-form">
+                    <label for="application-status" class="form-label">Update status</label>
+                    <select id="application-status" class="form-select"
+                            disabled="@IsBusy" @bind:get="job.Status" @bind:set="ChangeStatus">
+                        @foreach (var status in ApplicationStatuses.All)
+                        {
+                            <option value="@status">@status</option>
+                        }
+                    </select>
+                </div>
+
+                @if (pendingOperation == Operation.UpdateStatus)
+                {
+                    <p class="section-status actions actions-spaced" role="status">
+                        <span class="ui-spinner" aria-hidden="true"></span> Saving status...
+                    </p>
+                }
+                @if (feedbackTab == WorkspaceTab.Application)
+                {
+                    @if (errorMessage is not null)
+                    {
+                        <div class="alert alert-danger actions-spaced" role="alert">@errorMessage</div>
+                    }
+                    @if (successMessage is not null)
+                    {
+                        <div class="alert alert-success actions-spaced" role="status">@successMessage</div>
+                    }
+                }
+
+                @{ var createdDate = job.CreatedAtUtc.ToLocalTime(); }
+                <p class="text-muted workspace-created">Created <time datetime="@createdDate.ToString("yyyy-MM-dd")">@createdDate.ToString("MMM dd, yyyy")</time></p>
+            </div>
+        </section>
+    }
+</div>
+
+@code {
+    [Parameter]
+    public int Id { get; set; }
+
+    private static readonly (WorkspaceTab Value, string Label)[] Tabs =
+    [
+        (WorkspaceTab.Job, "Job Details"),
+        (WorkspaceTab.Resume, "Resume"),
+        (WorkspaceTab.Application, "Application")
+    ];
+
+    private readonly ElementReference[] tabButtons = new ElementReference[Tabs.Length];
+    private CancellationTokenSource? applicationRequests;
+    private JobApplicationDto? job;
+    private GeneratedResume? resume;
+    private ResumeEditor? resumeEditor;
+    private bool isLoading = true;
+    private string? loadError;
+    private string? resumeLoadError;
+    private string? errorMessage;
+    private string? successMessage;
+    private WorkspaceTab activeTab = WorkspaceTab.Job;
+    private WorkspaceTab? feedbackTab;
+    private Operation? pendingOperation;
+
+    private bool IsBusy => pendingOperation.HasValue;
+
+    private enum WorkspaceTab { Job, Resume, Application }
+    private enum Operation { LoadResume, GenerateResume, SaveResume, DownloadResume, UpdateStatus }
+
+    private static string TabId(WorkspaceTab tab) => $"workspace-tab-{tab}";
+    private static string PanelId(WorkspaceTab tab) => $"workspace-panel-{tab}";
+
+    private async Task HandleTabKey(KeyboardEventArgs args)
+    {
+        var index = (int)activeTab;
+        var target = args.Key switch
+        {
+            "ArrowLeft" => (index + Tabs.Length - 1) % Tabs.Length,
+            "ArrowRight" => (index + 1) % Tabs.Length,
+            "Home" => 0,
+            "End" => Tabs.Length - 1,
+            _ => index
+        };
+
+        if (target == index)
+            return;
+
+        activeTab = Tabs[target].Value;
+        await tabButtons[target].FocusAsync();
+    }
+
+    protected override async Task OnParametersSetAsync()
+    {
+        CancelRequests();
+        applicationRequests = new CancellationTokenSource();
+        var cancellationToken = applicationRequests.Token;
+        var applicationId = Id;
+
+        isLoading = true;
+        activeTab = WorkspaceTab.Job;
+        pendingOperation = null;
+        feedbackTab = null;
+        loadError = resumeLoadError = errorMessage = successMessage = null;
+        job = null;
+        resume = null;
+
+        try
+        {
+            var client = HttpClientFactory.CreateClient("JobPilotApi");
+            var application = await client.GetFromJsonAsync<JobApplicationDto>(
+                $"api/applications/{applicationId}", cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+            job = application ?? throw new InvalidOperationException("The API did not return this application.");
+
+            try
+            {
+                await LoadSavedResume(client, applicationId, cancellationToken);
+            }
+            catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
+            {
+                resumeLoadError = $"Could not load the saved resume. {ex.Message}";
+            }
+        }
+        catch (HttpRequestException ex) when (ex.StatusCode == HttpStatusCode.NotFound && !cancellationToken.IsCancellationRequested)
+        {
+            loadError = "This application could not be found.";
+        }
+        catch (Exception ex)
+        {
+            if (!cancellationToken.IsCancellationRequested)
+                loadError = $"Unable to load application. {ex.Message}";
+        }
+        finally
+        {
+            if (!cancellationToken.IsCancellationRequested)
+                isLoading = false;
+        }
+    }
+
+    private Task RetryLoadResume()
+    {
+        var applicationId = Id;
+        return ExecuteAsync(Operation.LoadResume, (client, cancellationToken) =>
+            LoadSavedResume(client, applicationId, cancellationToken));
+    }
+
+    private async Task LoadSavedResume(HttpClient client, int applicationId, CancellationToken cancellationToken)
+    {
+        using var response = await client.GetAsync($"api/applications/{applicationId}/resumes/latest", cancellationToken);
+        GeneratedResume? savedDraft = null;
+        if (response.StatusCode != HttpStatusCode.NotFound)
+        {
+            await response.EnsureJobPilotSuccessAsync(cancellationToken);
+            savedDraft = await response.Content.ReadFromJsonAsync<GeneratedResume>(cancellationToken)
+                ?? throw new InvalidOperationException("The API did not return the saved resume.");
+        }
+
+        cancellationToken.ThrowIfCancellationRequested();
+        resume = savedDraft;
+        resumeLoadError = null;
+    }
+
+    private Task GenerateResume()
+    {
+        if (job is not { } application || resume is not null || resumeLoadError is not null)
+            return Task.CompletedTask;
+
+        return ExecuteAsync(Operation.GenerateResume, async (client, cancellationToken) =>
+        {
+            using var response = await client.PostAsJsonAsync(
+                "api/resumes/generate", new { application.JobDescription }, cancellationToken);
+            await response.EnsureJobPilotSuccessAsync(cancellationToken);
+
+            var draft = await response.Content.ReadFromJsonAsync<GeneratedResume>(cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+            resume = draft ?? throw new InvalidOperationException("The API did not return a resume draft.");
+        });
+    }
+
+    private async Task SaveResume()
+    {
+        if (IsBusy || resume is not { } draft || !await ValidateResumeNameAsync(draft))
+            return;
+
+        var applicationId = Id;
+        await ExecuteAsync(Operation.SaveResume, async (client, cancellationToken) =>
+        {
+            using var response = await client.PostAsJsonAsync(
+                $"api/applications/{applicationId}/resumes", draft, cancellationToken);
+
+            await response.EnsureJobPilotSuccessAsync(cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+            successMessage = "Resume saved successfully.";
+        });
+    }
+
+    private Task ChangeStatus(string newStatus)
+    {
+        if (job is not { } application || string.IsNullOrWhiteSpace(newStatus) || newStatus == application.Status)
+            return Task.CompletedTask;
+
+        return ExecuteAsync(Operation.UpdateStatus, async (client, cancellationToken) =>
+        {
+            using var response = await client.PatchAsJsonAsync(
+                $"api/applications/{application.Id}/status", new { status = newStatus }, cancellationToken);
+            await response.EnsureJobPilotSuccessAsync(cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+            application.Status = newStatus;
+            successMessage = "Application status updated.";
+        });
+    }
+
+    private async Task DownloadResume()
+    {
+        if (IsBusy || resume is not { } draft || !await ValidateResumeNameAsync(draft))
+            return;
+
+        await ExecuteAsync(Operation.DownloadResume, async (client, cancellationToken) =>
+        {
+            using var response = await client.PostAsJsonAsync("api/resumes/export-docx", draft, cancellationToken);
+            await response.EnsureJobPilotSuccessAsync(cancellationToken);
+
+            var bytes = await response.Content.ReadAsByteArrayAsync(cancellationToken);
+            await JS.InvokeVoidAsync(
+                "jobPilot.downloadFile",
+                cancellationToken,
+                "JobPilotResume.docx",
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                Convert.ToBase64String(bytes));
+        });
+    }
+
+    private void HandleResumeChanged()
+    {
+        if (feedbackTab == WorkspaceTab.Resume)
+            successMessage = null;
+    }
+
+    private async ValueTask<bool> ValidateResumeNameAsync(GeneratedResume draft)
+    {
+        if (!string.IsNullOrWhiteSpace(draft.FullName))
+            return true;
+
+        if (resumeEditor is not null)
+            await resumeEditor.FocusFullNameAsync();
+
+        return false;
+    }
+
+    private async Task ExecuteAsync(Operation operation, Func<HttpClient, CancellationToken, Task> request)
+    {
+        if (IsBusy || applicationRequests is null)
+            return;
+
+        var cancellationToken = applicationRequests.Token;
+        pendingOperation = operation;
+        feedbackTab = operation == Operation.UpdateStatus ? WorkspaceTab.Application : WorkspaceTab.Resume;
+        errorMessage = successMessage = null;
+
+        try
+        {
+            await request(HttpClientFactory.CreateClient("JobPilotApi"), cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            if (!cancellationToken.IsCancellationRequested)
+                errorMessage = ex.Message;
+        }
+        finally
+        {
+            if (!cancellationToken.IsCancellationRequested)
+                pendingOperation = null;
+        }
+    }
+
+    private void CancelRequests()
+    {
+        applicationRequests?.Cancel();
+        applicationRequests?.Dispose();
+        applicationRequests = null;
+    }
+
+    public void Dispose() => CancelRequests();
+
+    private class JobApplicationDto
+    {
+        public int Id { get; set; }
+        public string JobTitle { get; set; } = "";
+        public string CompanyName { get; set; } = "";
+        public string JobDescription { get; set; } = "";
+        public int? MatchScore { get; set; }
+        public string Status { get; set; } = "";
+        public DateTime CreatedAtUtc { get; set; }
+    }
+}

@@ -1,0 +1,193 @@
+@page "/saved-jobs"
+@rendermode InteractiveServer
+
+@using JobPilot.Web.Models
+@inject IHttpClientFactory HttpClientFactory
+
+<PageTitle>Saved Jobs - JobPilot</PageTitle>
+
+<div class="page-intro">
+    <h2>Track your applications</h2>
+    <p>Find a saved role, reopen its resume, and track where you are in the application process.</p>
+</div>
+
+@if (isLoading)
+{
+    <div class="card">
+        <div class="card-body saved-loading">
+            <p class="actions" role="status"><span class="ui-spinner" aria-hidden="true"></span> Loading saved jobs...</p>
+            <div class="loading-lines" aria-hidden="true"><span></span><span></span><span></span></div>
+        </div>
+    </div>
+}
+else if (errorMessage is not null)
+{
+    <div class="alert alert-danger" role="alert">
+        <strong>Could not load saved jobs.</strong>
+        <p>@errorMessage</p>
+        <button type="button" class="btn btn-outline-primary" @onclick="LoadJobs">Try again</button>
+    </div>
+}
+else if (jobs.Count == 0)
+{
+    <section class="card" aria-labelledby="empty-jobs">
+        <div class="card-body saved-empty">
+            <span class="destination-icon" aria-hidden="true"><span class="app-icon icon-saved"></span></span>
+            <h3 id="empty-jobs">No saved jobs yet</h3>
+            <p class="text-muted">Analyze a listing and save it to start tracking it here.</p>
+            <a class="btn btn-primary" href="jobs">Analyze a job</a>
+        </div>
+    </section>
+}
+else
+{
+    var filteredJobs = FilterJobs();
+
+    <section class="card table-panel" aria-labelledby="applications-heading">
+        <div class="saved-table-toolbar">
+            <div class="saved-table-heading">
+                <h3 id="applications-heading">Applications</h3>
+                <p class="text-muted" role="status">Showing @filteredJobs.Count of @jobs.Count</p>
+            </div>
+
+            <div class="saved-filters">
+                <div>
+                    <label for="saved-job-search" class="form-label">Search saved jobs</label>
+                    <input id="saved-job-search" type="search" class="form-control" @ref="searchInput"
+                           placeholder="Company or position" @bind="searchText" @bind:event="oninput" />
+                </div>
+                <div>
+                    <label for="saved-job-status" class="form-label">Status</label>
+                    <select id="saved-job-status" class="form-select" @bind="selectedStatus">
+                        <option value="">All statuses</option>
+                        @foreach (var status in ApplicationStatuses.All)
+                        {
+                            <option value="@status">@status</option>
+                        }
+                    </select>
+                </div>
+            </div>
+        </div>
+
+        @if (filteredJobs.Count == 0)
+        {
+            <div class="card-body saved-empty filtered-empty">
+                <h4>No applications match your filters</h4>
+                <p class="text-muted">Try a different company, position, or status.</p>
+                <button type="button" class="btn btn-outline-primary" @onclick="ClearFilters">Clear filters</button>
+            </div>
+        }
+        else
+        {
+            <div class="table-scroll" role="region" aria-label="Saved applications table" tabindex="0">
+                <table class="table" role="table">
+                    <thead role="rowgroup">
+                        <tr role="row">
+                            <th scope="col" role="columnheader">Position</th>
+                            <th scope="col" role="columnheader">Company</th>
+                            <th scope="col" role="columnheader">Match Score</th>
+                            <th scope="col" role="columnheader">Status</th>
+                            <th scope="col" role="columnheader">Created</th>
+                            <th scope="col" role="columnheader">Action</th>
+                        </tr>
+                    </thead>
+                    <tbody role="rowgroup">
+                        @foreach (var job in filteredJobs)
+                        {
+                            var applicationUrl = $"applications/{job.Id}";
+                            var createdDate = job.CreatedAtUtc.ToLocalTime();
+
+                            <tr role="row" @key="job.Id">
+                                <td class="job-position" role="cell"><a href="@applicationUrl">@job.JobTitle</a></td>
+                                <td class="job-company" role="cell">@job.CompanyName</td>
+                                <td class="job-score" role="cell">
+                                    <span class="mobile-cell-label" aria-hidden="true">Match</span>
+                                    @if (job.MatchScore is int score)
+                                    {
+                                        <span class="score-badge">@score%</span>
+                                    }
+                                    else
+                                    {
+                                        <span class="text-muted">Not analyzed</span>
+                                    }
+                                </td>
+                                <td class="job-status" role="cell">
+                                    <span class="status-badge" data-status="@job.Status.ToLowerInvariant()">@job.Status</span>
+                                </td>
+                                <td class="job-created nowrap" role="cell">
+                                    <span class="mobile-cell-label" aria-hidden="true">Created</span>
+                                    <time datetime="@createdDate.ToString("yyyy-MM-dd")">@createdDate.ToString("MMM dd, yyyy")</time>
+                                </td>
+                                <td class="job-action" role="cell">
+                                    <a class="btn btn-outline-primary open-application" href="@applicationUrl"
+                                       aria-label="@($"Open Application for {job.JobTitle} at {job.CompanyName}")">
+                                        Open Application <span aria-hidden="true">→</span>
+                                    </a>
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
+    </section>
+}
+
+@code {
+    private bool isLoading = true;
+    private string? errorMessage;
+    private List<SavedJob> jobs = [];
+    private string searchText = "";
+    private string selectedStatus = "";
+    private ElementReference searchInput;
+
+    protected override Task OnInitializedAsync() => LoadJobs();
+
+    private async Task LoadJobs()
+    {
+        isLoading = true;
+        errorMessage = null;
+        try
+        {
+            var client = HttpClientFactory.CreateClient("JobPilotApi");
+            using var response = await client.GetAsync("api/applications");
+            await response.EnsureJobPilotSuccessAsync();
+            jobs = await response.Content.ReadFromJsonAsync<List<SavedJob>>() ?? [];
+        }
+        catch (Exception ex)
+        {
+            errorMessage = ex.Message;
+        }
+        finally
+        {
+            isLoading = false;
+        }
+    }
+
+    private List<SavedJob> FilterJobs()
+    {
+        var query = searchText.Trim();
+
+        return jobs.Where(job =>
+            (selectedStatus.Length == 0 || string.Equals(job.Status, selectedStatus, StringComparison.OrdinalIgnoreCase)) &&
+            (query.Length == 0 || job.CompanyName.Contains(query, StringComparison.OrdinalIgnoreCase) ||
+             job.JobTitle.Contains(query, StringComparison.OrdinalIgnoreCase))).ToList();
+    }
+
+    private async Task ClearFilters()
+    {
+        searchText = "";
+        selectedStatus = "";
+        await searchInput.FocusAsync();
+    }
+
+    private class SavedJob
+    {
+        public int Id { get; set; }
+        public string CompanyName { get; set; } = "";
+        public string JobTitle { get; set; } = "";
+        public int? MatchScore { get; set; }
+        public string Status { get; set; } = "";
+        public DateTime CreatedAtUtc { get; set; }
+    }
+}

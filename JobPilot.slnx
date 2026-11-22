@@ -1,0 +1,5 @@
+<Solution>
+  <Project Path="JobPilot.Api/JobPilot.Api.csproj" />
+  <Project Path="JobPilot.Tests/JobPilot.Tests.csproj" />
+  <Project Path="JobPilot.Web/JobPilot.Web.csproj" />
+</Solution>

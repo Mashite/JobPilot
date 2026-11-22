@@ -1,0 +1,82 @@
+@JobPilot_Api_HostAddress = http://localhost:5287
+
+GET {{JobPilot_Api_HostAddress}}/openapi/v1.json
+Accept: application/json
+
+###
+
+POST {{JobPilot_Api_HostAddress}}/api/jobs/analyze
+Content-Type: application/json
+
+{
+  "jobDescription": "We are looking for a Senior Software Engineer with 8+ years of C# and .NET experience, SQL Server, REST APIs, Azure DevOps and manufacturing systems experience."
+}
+
+
+### Match Job DEscription with Candidate Profile
+# @timeout 180000
+POST {{JobPilot_Api_HostAddress}}/api/jobs/match
+Content-Type: application/json
+
+{
+  "jobDescription": "We are hiring a Senior MES Software Engineer. Requirements include C#, .NET, SQL Server, PLC integration, manufacturing systems, Python, and Azure cloud services."
+}
+
+
+### Generate tailored resume
+# @timeout 180000
+POST http://localhost:5287/api/resumes/generate
+Content-Type: application/json
+
+{
+  "jobDescription": "We are hiring a Senior MES Software Engineer with experience in C#, .NET, SQL Server, PLC integration, manufacturing systems, Python, and Azure cloud services."
+}
+
+### Generate Word Resume
+# @timeout 180000
+POST http://localhost:5287/api/resumes/generate-docx
+Content-Type: application/json
+
+{
+  "jobDescription": "We are hiring a Senior MES Software Engineer. Requirements include C#, .NET, SQL Server, PLC integration, manufacturing systems, Python, and Azure cloud services."
+}
+
+
+
+
+
+### Test 1 - Normal conversation
+POST {{JobPilot_Api_HostAddress}}/api/agent/chat
+Content-Type: application/json
+
+{
+  "message": "Hello! What can you help me with?"
+}
+
+### Test 2 - Ask agent to analyze a job
+POST {{JobPilot_Api_HostAddress}}/api/agent/chat
+Content-Type: application/json
+
+{
+  "message": "Analyze this job and compare it with my experience.",
+  "jobDescription": "We are hiring a Senior MES Software Engineer. Requirements include C#, .NET 10, SQL Server, REST APIs, PLC communication, industrial automation and manufacturing systems."
+}
+
+### Test 3 - Unsupported action
+POST {{JobPilot_Api_HostAddress}}/api/agent/chat
+Content-Type: application/json
+
+{
+  "message": "Delete all my saved applications."
+}
+
+
+#### Test 4 - Analyze job and generate tailored resume    
+
+POST {{JobPilot_Api_HostAddress}}/api/agent/chat
+Content-Type: application/json
+
+{
+  "message": "Analyze this job against my profile and then generate a tailored resume.",
+  "jobDescription": "We are looking for a Senior MES Software Engineer with experience in C#, .NET, SQL Server, REST APIs, PLC integration, manufacturing systems, industrial automation and technical leadership."
+}

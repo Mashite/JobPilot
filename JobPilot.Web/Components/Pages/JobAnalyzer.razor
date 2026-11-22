@@ -1,0 +1,487 @@
+@page "/jobs"
+@rendermode InteractiveServer
+
+@using System.Net.Http.Json
+@using JobPilot.Web.Models
+@using JobPilot.Web.Components.Resume
+@inject IHttpClientFactory HttpClientFactory
+@inject IJSRuntime JS
+
+<PageTitle>Job Analyzer - JobPilot</PageTitle>
+
+<div class="page-intro">
+    <h2>Analyze a job</h2>
+    <p>Compare a job description with your profile, then draft a tailored resume and save the application.</p>
+</div>
+
+<div class="analysis-workspace page-stack">
+    <div class="analysis-grid">
+        <section class="card analyzer-input" aria-labelledby="job-input-heading">
+            <div class="card-body">
+                <div class="section-heading">
+                    <h3 id="job-input-heading">Job details</h3>
+                    <p class="text-muted">Paste the full listing for a more useful skills comparison.</p>
+                </div>
+
+                <div class="job-fields">
+                    <div>
+                        <label for="company-name" class="form-label">Company Name</label>
+                        <input id="company-name" class="form-control" maxlength="200"
+                               placeholder="Enter the company name"
+                               disabled="@(IsBusy || savedApplicationId.HasValue)"
+                               @bind="companyName" @bind:event="oninput" />
+                    </div>
+                    <div>
+                        <label for="job-title" class="form-label">Job Title <span class="field-note">(optional)</span></label>
+                        <input id="job-title" class="form-control" maxlength="300"
+                               placeholder="@JobTitlePlaceholder" aria-describedby="job-title-note"
+                               aria-invalid="@(ApplicationTitle.Length > 300 ? "true" : null)"
+                               disabled="@(IsBusy || savedApplicationId.HasValue)"
+                               @bind="jobTitle" @bind:event="oninput" />
+                        @if (ApplicationTitle.Length > 300)
+                        {
+                            <p id="job-title-note" class="validation-message">Enter a job title with 300 characters or fewer to save this job.</p>
+                        }
+                        else
+                        {
+                            <p id="job-title-note" class="field-note">Uses the title found in the listing if left blank.</p>
+                        }
+                    </div>
+                </div>
+
+                <div class="description-field">
+                    <label for="job-description" class="form-label">Job Description</label>
+                    <textarea id="job-description" class="form-control" rows="8" required @ref="descriptionInput"
+                              aria-invalid="@(descriptionRequired ? "true" : null)"
+                              aria-describedby="@(descriptionRequired ? "job-description-error" : null)"
+                              placeholder="Paste the responsibilities and qualifications from the job listing..."
+                              disabled="@IsBusy" @bind="jobDescription" @bind:after="ResetJobResults"></textarea>
+                    @if (descriptionRequired)
+                    {
+                        <p id="job-description-error" class="validation-message" role="alert">Enter a job description to continue.</p>
+                    }
+                </div>
+
+                <div class="actions actions-spaced">
+                    <button type="button" class="btn btn-primary" disabled="@IsBusy" @onclick="AnalyzeJob">
+                        @if (pendingOperation == Operation.Analyze)
+                        {
+                            <span class="ui-spinner" aria-hidden="true"></span>
+                        }
+                        @(pendingOperation == Operation.Analyze ? "Analyzing..." : "Analyze Job")
+                    </button>
+                </div>
+
+                @if (errorOperation == Operation.Analyze)
+                {
+                    <div class="alert alert-danger actions-spaced" role="alert">@errorMessage</div>
+                }
+            </div>
+        </section>
+
+        <section class="card match-panel" aria-labelledby="match-heading">
+            <div class="card-body">
+                <h3 id="match-heading">Match analysis</h3>
+
+                @if (pendingOperation == Operation.Analyze)
+                {
+                    <div class="match-empty" role="status">
+                        <span class="match-empty-icon" aria-hidden="true"><span class="ui-spinner"></span></span>
+                        <h4>Comparing your skills</h4>
+                        <p class="text-muted">Checking the listing against the skills in your profile.</p>
+                    </div>
+                }
+                else if (matchResult is not { } match)
+                {
+                    <div class="match-empty">
+                        <span class="match-empty-icon" aria-hidden="true"><span class="app-icon icon-analyzer"></span></span>
+                        <h4>No analysis yet</h4>
+                        <p class="text-muted">Analyze a listing to see your match score, verified skills, and gaps.</p>
+                    </div>
+                }
+                else
+                {
+                    var score = Math.Clamp(match.MatchScore, 0, 100);
+
+                    <div class="match-summary">
+                        <div class="score-ring" style="@($"--match-score: {score}%")"
+                             role="meter" aria-label="Match score" aria-valuemin="0" aria-valuemax="100"
+                             aria-valuenow="@score" aria-valuetext="@($"{score}%")">
+                            <span aria-hidden="true">@score<span class="score-percent">%</span></span>
+                        </div>
+                        <div>
+                            <p class="score-label">Match score</p>
+                            @if (!string.IsNullOrWhiteSpace(match.JobTitle))
+                            {
+                                <p class="match-title break-word">@match.JobTitle</p>
+                            }
+                            <p class="text-muted">Based on skills verified in your profile.</p>
+                        </div>
+                    </div>
+
+                    <div class="skill-groups">
+                        <section class="skill-panel matched" aria-labelledby="matched-heading">
+                            <h4 id="matched-heading">Matched skills <span class="skill-count">@match.MatchingSkills.Count</span></h4>
+                            @if (match.MatchingSkills.Count == 0)
+                            {
+                                <p class="text-muted">No verified matches.</p>
+                            }
+                            else
+                            {
+                                <ul class="skill-list">
+                                    @foreach (var skill in match.MatchingSkills)
+                                    {
+                                        <li>@skill</li>
+                                    }
+                                </ul>
+                            }
+                        </section>
+
+                        <section class="skill-panel unverified" aria-labelledby="unverified-heading">
+                            <h4 id="unverified-heading">Missing or unverified <span class="skill-count">@match.MissingOrUnverifiedSkills.Count</span></h4>
+                            @if (match.MissingOrUnverifiedSkills.Count == 0)
+                            {
+                                <p class="text-muted">No gaps reported.</p>
+                            }
+                            else
+                            {
+                                <ul class="skill-list">
+                                    @foreach (var skill in match.MissingOrUnverifiedSkills)
+                                    {
+                                        <li>@skill</li>
+                                    }
+                                </ul>
+                            }
+                        </section>
+                    </div>
+
+                    @if (match.Evidence.Count > 0)
+                    {
+                        <details class="match-evidence">
+                            <summary>Supporting evidence <span class="field-note">(@match.Evidence.Count)</span></summary>
+                            <ul class="break-word">
+                                @foreach (var evidence in match.Evidence)
+                                {
+                                    <li>@evidence</li>
+                                }
+                            </ul>
+                        </details>
+                    }
+                }
+            </div>
+        </section>
+    </div>
+
+    <section class="card" aria-labelledby="resume-heading">
+        <div class="card-body workflow-card">
+            <div>
+                <h3 id="resume-heading">Tailored resume</h3>
+                <p class="text-muted">Generate a draft from your profile and the job description, then review and edit it.</p>
+            </div>
+            <button type="button" class="btn btn-outline-primary" disabled="@IsBusy" @onclick="GenerateResume">
+                @if (pendingOperation == Operation.GenerateResume)
+                {
+                    <span class="ui-spinner" aria-hidden="true"></span>
+                }
+                @(pendingOperation == Operation.GenerateResume ? "Generating..." : "Generate Resume")
+            </button>
+            @if (pendingOperation == Operation.GenerateResume)
+            {
+                <p class="section-status workflow-feedback" role="status">Preparing your resume draft...</p>
+            }
+            @if (errorOperation == Operation.GenerateResume)
+            {
+                <div class="alert alert-danger workflow-feedback" role="alert">@errorMessage</div>
+            }
+        </div>
+    </section>
+
+    @if (resume is not null)
+    {
+        <section class="resume-region" aria-label="Resume draft">
+            <fieldset disabled="@IsBusy">
+                <ResumeEditor Resume="resume" ResumeChanged="HandleResumeChanged" @ref="resumeEditor" />
+            </fieldset>
+
+            <div class="actions actions-spaced">
+                <button type="button" class="btn btn-outline-primary" disabled="@IsBusy" @onclick="DownloadResume">
+                    @if (pendingOperation == Operation.DownloadResume)
+                    {
+                        <span class="ui-spinner" aria-hidden="true"></span>
+                    }
+                    @(pendingOperation == Operation.DownloadResume ? "Preparing download..." : "Download Word Resume")
+                </button>
+            </div>
+            @if (errorOperation == Operation.DownloadResume)
+            {
+                <div class="alert alert-danger" role="alert">@errorMessage</div>
+            }
+        </section>
+    }
+
+    <section class="card" aria-labelledby="save-heading">
+        <div class="card-body workflow-card">
+            <div>
+                <h3 id="save-heading">Save application</h3>
+                @if (savedApplicationId.HasValue)
+                {
+                    <p class="text-muted">Open the saved application or save a new revision of the resume.</p>
+                }
+                else if (matchResult is null)
+                {
+                    <p class="text-muted">Analyze the job and enter a company name to save the application.</p>
+                }
+                else if (string.IsNullOrWhiteSpace(companyName) || string.IsNullOrWhiteSpace(ApplicationTitle))
+                {
+                    <p class="text-muted">Complete the company name and job title in Job details.</p>
+                }
+                else if (ApplicationTitle.Length > 300)
+                {
+                    <p class="text-muted">Shorten the job title in Job details before saving.</p>
+                }
+                else
+                {
+                    <p class="text-muted">Save this role, its match score, and any resume draft to Saved Jobs.</p>
+                }
+            </div>
+
+            <div class="actions">
+                @if (savedApplicationId is int applicationId)
+                {
+                    @if (resume is not null)
+                    {
+                        <button type="button" class="btn btn-primary" disabled="@IsBusy" @onclick="SaveResume">
+                            @if (pendingOperation == Operation.SaveResume)
+                            {
+                                <span class="ui-spinner" aria-hidden="true"></span>
+                            }
+                            @(pendingOperation == Operation.SaveResume ? "Saving..." : "Save Resume")
+                        </button>
+                    }
+                    <a class="btn btn-outline-primary" href="@($"/applications/{applicationId}")">Open Saved Application</a>
+                }
+                else
+                {
+                    <button type="button" class="btn btn-primary" disabled="@(!CanSaveJob)" @onclick="SaveJob">
+                        @if (pendingOperation == Operation.SaveJob)
+                        {
+                            <span class="ui-spinner" aria-hidden="true"></span>
+                        }
+                        @(pendingOperation == Operation.SaveJob ? "Saving..." : resume is null ? "Save Job" : "Save Job and Resume")
+                    </button>
+                }
+            </div>
+
+            @if (pendingOperation is Operation.SaveJob or Operation.SaveResume)
+            {
+                <p class="section-status workflow-feedback" role="status">Saving to Saved Jobs...</p>
+            }
+            @if (errorOperation is Operation.SaveJob or Operation.SaveResume)
+            {
+                <div class="alert alert-danger workflow-feedback" role="alert">@errorMessage</div>
+            }
+            @if (!string.IsNullOrWhiteSpace(saveMessage))
+            {
+                <div class="alert alert-success workflow-feedback" role="status">@saveMessage</div>
+            }
+        </div>
+    </section>
+</div>
+
+@code {
+    private string jobDescription = "";
+    private string companyName = "";
+    private string jobTitle = "";
+    private Operation? pendingOperation;
+    private Operation? errorOperation;
+    private string? errorMessage;
+    private string? saveMessage;
+    private int? savedApplicationId;
+    private bool descriptionRequired;
+    private ElementReference descriptionInput;
+    private ResumeEditor? resumeEditor;
+
+    private JobMatchResult? matchResult;
+    private GeneratedResume? resume;
+
+    private bool IsBusy => pendingOperation.HasValue;
+    private string ApplicationTitle => string.IsNullOrWhiteSpace(jobTitle) ? matchResult?.JobTitle?.Trim() ?? "" : jobTitle.Trim();
+    private string JobTitlePlaceholder => string.IsNullOrWhiteSpace(matchResult?.JobTitle)
+        ? "Auto-detected from the listing"
+        : matchResult.JobTitle;
+
+    private bool CanSaveJob =>
+        !IsBusy && !savedApplicationId.HasValue && matchResult is not null &&
+        !string.IsNullOrWhiteSpace(companyName) && ApplicationTitle.Length is > 0 and <= 300;
+
+    private enum Operation
+    {
+        Analyze,
+        GenerateResume,
+        DownloadResume,
+        SaveJob,
+        SaveResume
+    }
+
+    private void ResetJobResults()
+    {
+        if (savedApplicationId.HasValue)
+        {
+            companyName = "";
+            jobTitle = "";
+        }
+
+        matchResult = null;
+        resume = null;
+        savedApplicationId = null;
+        errorOperation = null;
+        errorMessage = null;
+        saveMessage = null;
+        descriptionRequired = false;
+    }
+
+    private void HandleResumeChanged() => saveMessage = null;
+
+    private Task AnalyzeJob() => ExecuteAsync(Operation.Analyze, async client =>
+    {
+        using var response = await client.PostAsJsonAsync("api/jobs/match", new { jobDescription });
+        await response.EnsureJobPilotSuccessAsync();
+        matchResult = await response.Content.ReadFromJsonAsync<JobMatchResult>()
+            ?? throw new InvalidOperationException("The API did not return a match result.");
+    });
+
+    private Task GenerateResume() => ExecuteAsync(Operation.GenerateResume, async client =>
+    {
+        using var response = await client.PostAsJsonAsync("api/resumes/generate", new { jobDescription });
+        await response.EnsureJobPilotSuccessAsync();
+        resume = await response.Content.ReadFromJsonAsync<GeneratedResume>()
+            ?? throw new InvalidOperationException("The API did not return a resume draft.");
+        saveMessage = null;
+    });
+
+    private async Task DownloadResume()
+    {
+        if (IsBusy || resume is not { } draft || !await ValidateResumeNameAsync())
+            return;
+
+        await ExecuteAsync(Operation.DownloadResume, async client =>
+        {
+            using var response = await client.PostAsJsonAsync("api/resumes/export-docx", draft);
+            await response.EnsureJobPilotSuccessAsync();
+
+            var bytes = await response.Content.ReadAsByteArrayAsync();
+            await JS.InvokeVoidAsync(
+                "jobPilot.downloadFile",
+                "JobPilotResume.docx",
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                Convert.ToBase64String(bytes));
+        });
+    }
+
+    private async Task SaveJob()
+    {
+        if (!CanSaveJob || matchResult is not { } match || !await ValidateResumeNameAsync())
+            return;
+
+        await ExecuteAsync(Operation.SaveJob, async client =>
+        {
+            using var response = await client.PostAsJsonAsync(
+                "api/applications",
+                new
+                {
+                    jobTitle = ApplicationTitle,
+                    companyName,
+                    jobDescription,
+                    matchScore = match.MatchScore,
+                    resume
+                });
+
+            await response.EnsureJobPilotSuccessAsync();
+
+            var saved = await response.Content.ReadFromJsonAsync<SavedApplicationResponse>();
+            savedApplicationId = saved is { Id: > 0 }
+                ? saved.Id
+                : throw new InvalidOperationException("The API did not return the saved application ID.");
+
+            saveMessage = resume is null ? "Job saved." : "Job and resume saved.";
+        });
+    }
+
+    private async Task SaveResume()
+    {
+        if (IsBusy || savedApplicationId is not int applicationId || resume is not { } draft || !await ValidateResumeNameAsync())
+            return;
+
+        await ExecuteAsync(Operation.SaveResume, async client =>
+        {
+            saveMessage = null;
+            using var response = await client.PostAsJsonAsync($"api/applications/{applicationId}/resumes", draft);
+            await response.EnsureJobPilotSuccessAsync();
+            saveMessage = "Resume saved to this application.";
+        });
+    }
+
+    private class SavedApplicationResponse
+    {
+        public int Id { get; set; }
+    }
+
+    private async ValueTask<bool> ValidateResumeNameAsync()
+    {
+        if (resume is null || !string.IsNullOrWhiteSpace(resume.FullName))
+            return true;
+
+        if (resumeEditor is not null)
+            await resumeEditor.FocusFullNameAsync();
+
+        return false;
+    }
+
+    private async Task ExecuteAsync(Operation operation, Func<HttpClient, Task> request)
+    {
+        if (IsBusy)
+            return;
+
+        if (string.IsNullOrWhiteSpace(jobDescription))
+        {
+            descriptionRequired = true;
+            errorOperation = null;
+            errorMessage = null;
+            await descriptionInput.FocusAsync();
+            return;
+        }
+
+        pendingOperation = operation;
+        errorOperation = null;
+        errorMessage = null;
+
+        try
+        {
+            var client = HttpClientFactory.CreateClient("JobPilotApi");
+            await request(client);
+        }
+        catch (Exception ex)
+        {
+            ShowError(operation, ex.Message);
+        }
+        finally
+        {
+            pendingOperation = null;
+        }
+    }
+
+    private void ShowError(Operation operation, string message)
+    {
+        errorOperation = operation;
+        errorMessage = message;
+    }
+
+    public class JobMatchResult
+    {
+        public string JobTitle { get; set; } = "";
+        public int MatchScore { get; set; }
+        public List<string> MatchingSkills { get; set; } = [];
+        public List<string> MissingOrUnverifiedSkills { get; set; } = [];
+        public List<string> Evidence { get; set; } = [];
+    }
+}

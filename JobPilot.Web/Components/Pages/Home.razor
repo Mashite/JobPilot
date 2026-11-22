@@ -1,0 +1,43 @@
+﻿@page "/"
+
+<PageTitle>Dashboard - JobPilot</PageTitle>
+
+<div class="page-stack">
+    <section class="dashboard-hero" aria-labelledby="dashboard-heading">
+        <div class="hero-copy">
+            <h2 id="dashboard-heading">Make your next career move</h2>
+            <p>See how a role fits your profile, tailor your resume, and keep track of the jobs you save.</p>
+        </div>
+
+        <div class="hero-visual" aria-hidden="true">
+            <div class="hero-paper">
+                <span class="hero-paper-mark"><span class="app-icon icon-analyzer"></span></span>
+                <span class="hero-paper-line"></span>
+                <span class="hero-paper-line"></span>
+                <span class="hero-paper-line"></span>
+                <span class="hero-paper-line"></span>
+            </div>
+            <span class="hero-check"></span>
+        </div>
+    </section>
+
+    <div class="dashboard-grid">
+        <section class="card" aria-labelledby="analyzer-heading">
+            <div class="card-body">
+                <span class="destination-icon" aria-hidden="true"><span class="app-icon icon-analyzer"></span></span>
+                <h3 id="analyzer-heading">Job Analyzer</h3>
+                <p>Compare a job description with your skills and draft a tailored resume.</p>
+                <a class="btn btn-primary" href="jobs">Analyze a job <span aria-hidden="true">→</span></a>
+            </div>
+        </section>
+
+        <section class="card" aria-labelledby="saved-heading">
+            <div class="card-body">
+                <span class="destination-icon" aria-hidden="true"><span class="app-icon icon-saved"></span></span>
+                <h3 id="saved-heading">Saved Jobs</h3>
+                <p>Reopen an application, edit its resume, or update its status.</p>
+                <a class="btn btn-outline-primary" href="saved-jobs">View saved jobs <span aria-hidden="true">→</span></a>
+            </div>
+        </section>
+    </div>
+</div>
