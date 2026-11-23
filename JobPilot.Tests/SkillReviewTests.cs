@@ -3,6 +3,7 @@ using System.Net.Http.Json;
 using System.Text.Json;
 using JobPilot.Api.Models;
 using JobPilot.Api.Services;
+using JobPilot.Api.Services.Ai;
 using JobPilot.Web.Models;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.Extensions.Configuration;
@@ -109,7 +110,7 @@ public sealed class SkillReviewTests : IDisposable
     {
         var (profiles, _) = await CreateProfileAsync();
         using var client = new HttpClient(new DraftResponse()) { BaseAddress = new Uri("http://localhost/") };
-        var generator = new ResumeGeneratorService(client, normalizer);
+        var generator = new ResumeGeneratorService(new OllamaModelProvider(client, "test"), normalizer);
         const string job = "Use C#, Docker, and Kubernetes.";
 
         var before = await generator.GenerateAsync(job, await profiles.GetProfileAsync());

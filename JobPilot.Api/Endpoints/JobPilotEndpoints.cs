@@ -1,8 +1,8 @@
-using Azure.Core;
 using JobPilot.Api.Models.Agent;
 using JobPilot.Api.Models.Resume;
 using JobPilot.Api.Services;
 using JobPilot.Api.Services.Agent;
+using JobPilot.Api.Services.Ai;
 
 namespace JobPilot.Api.Endpoints;
 
@@ -10,30 +10,42 @@ internal static class JobPilotEndpoints
 {
     public static void MapJobPilotEndpoints(this IEndpointRouteBuilder endpoints)
     {
-        endpoints.MapPost("/api/jobs/analyze", AnalyzeJob);
-        endpoints.MapPost("/api/jobs/match", MatchJob);
-        endpoints.MapPost("/api/resumes/generate", GenerateResume);
-        endpoints.MapPost("/api/resumes/generate-docx", GenerateResumeDocx);
+        endpoints.MapPost("/api/jobs/analyze", AnalyzeJob).AddEndpointFilter(HandleAiErrors);
+        endpoints.MapPost("/api/jobs/match", MatchJob).AddEndpointFilter(HandleAiErrors);
+        endpoints.MapPost("/api/resumes/generate", GenerateResume).AddEndpointFilter(HandleAiErrors);
+        endpoints.MapPost("/api/resumes/generate-docx", GenerateResumeDocx).AddEndpointFilter(HandleAiErrors);
         endpoints.MapPost("/api/resumes/export-docx", ExportResumeDocx);
-        endpoints.MapPost("/api/agent/chat", ChatWithAgent);
+        endpoints.MapPost("/api/agent/chat", ChatWithAgent).AddEndpointFilter(HandleAiErrors);
+    }
+
+    private static async ValueTask<object?> HandleAiErrors(EndpointFilterInvocationContext context, EndpointFilterDelegate next)
+    {
+        try
+        {
+            return await next(context);
+        }
+        catch (AiProviderException ex)
+        {
+            return Results.Problem(title: "AI request failed", detail: ex.Message, statusCode: ex.StatusCode);
+        }
     }
 
     private static async Task<IResult> AnalyzeJob(
         AnalyzeJobRequest request,
-        OllamaService ollama,
+        JobAnalysisService analysis,
         CancellationToken cancellationToken)
     {
         if (string.IsNullOrWhiteSpace(request.JobDescription))
             return Results.BadRequest("Job description is required.");
 
-        var result = await ollama.AnalyzeJobAsync(request.JobDescription, cancellationToken);
+        var result = await analysis.AnalyzeJobAsync(request.JobDescription, cancellationToken);
         return Results.Ok(new { analysis = result });
     }
 
     private static async Task<IResult> MatchJob(
         AnalyzeJobRequest request,
         CandidateProfileService profileService,
-        OllamaService ollamaService,
+        JobAnalysisService analysis,
         JobMatchingService matchingService,
         CancellationToken cancellationToken)
     {
@@ -41,7 +53,7 @@ internal static class JobPilotEndpoints
             return Results.BadRequest("Job description is required.");
 
         var profile = await profileService.GetProfileAsync(cancellationToken);
-        var jobAnalysis = await ollamaService.ExtractRequirementsAsync(
+        var jobAnalysis = await analysis.ExtractRequirementsAsync(
             request.JobDescription, cancellationToken);
         var matchResult = matchingService.Match(jobAnalysis, profile);
         return Results.Ok(matchResult);
@@ -124,19 +136,6 @@ internal static class JobPilotEndpoints
                 new { error = "Message is required." });
         }
 
-        try
-        {
-            var result = await agent.RunAsync(
-                request,
-                cancellationToken);
-
-            return Results.Ok(result);
-        }
-        catch (HttpRequestException ex)
-        {
-            return Results.Problem(
-                detail: ex.Message,
-                statusCode: 502);
-        }
+        return Results.Ok(await agent.RunAsync(request, cancellationToken));
     }
 }

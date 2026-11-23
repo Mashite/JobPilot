@@ -3,6 +3,7 @@ using System.Net.Http.Json;
 using System.Text.Json;
 using JobPilot.Api.Models;
 using JobPilot.Api.Services;
+using JobPilot.Api.Services.Ai;
 using JobPilot.Web.Models;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.Extensions.Configuration;
@@ -115,7 +116,8 @@ public sealed class MasterCvTests : IDisposable
 
         var handler = new DraftHandler();
         using var client = new HttpClient(handler) { BaseAddress = new Uri("http://localhost/") };
-        var resume = await new ResumeGeneratorService(client, normalizer).GenerateAsync("Use Docker.", latest);
+        var resume = await new ResumeGeneratorService(new OllamaModelProvider(client, "test"), normalizer)
+            .GenerateAsync("Use Docker.", latest);
         Assert.Equal(["Docker"], resume.TechnicalSkills);
         Assert.Equal("Platform Developer", resume.ProfessionalTitle);
         Assert.Equal("Maintains verified development tooling.", resume.ProfessionalSummary);

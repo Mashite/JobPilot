@@ -2,7 +2,6 @@
 @rendermode InteractiveServer
 @implements IDisposable
 
-@using System.Net
 @using System.Text.Json
 @using JobPilot.Web.Models
 @using JobPilot.Web.Models.Agent
@@ -26,7 +25,7 @@
     <header class="chat-header">
         <div class="chat-heading">
             <h3 id="chat-heading">Conversation</h3>
-            <span class="provider-label">Ollama / Local AI</span>
+            <span class="provider-label">Configured AI provider</span>
         </div>
         <button class="btn btn-outline-primary" type="button" @onclick="ClearChat"
                 disabled="@(isSending || !HasChatState)">Clear Chat</button>
@@ -107,7 +106,7 @@
                 @if (isSending)
                 {
                     <span class="ui-spinner" aria-hidden="true"></span>
-                    <span>Waiting for Ollama…</span>
+                    <span>Waiting for the AI provider…</span>
                 }
             </span>
         </div>
@@ -193,12 +192,9 @@
         }
         catch (HttpRequestException ex)
         {
-            errorMessage = ex.StatusCode switch
-            {
-                HttpStatusCode.BadGateway => "The JobPilot API could not get a response from Ollama. Check Ollama and try again.",
-                null => "Could not reach the JobPilot API. Check that it is running and try again.",
-                _ => ex.Message
-            };
+            errorMessage = ex.StatusCode is null
+                ? "Could not reach the JobPilot API. Check that it is running and try again."
+                : ex.Message;
         }
         catch (JsonException)
         {
@@ -207,7 +203,7 @@
         catch (OperationCanceledException)
         {
             if (!cancellationToken.IsCancellationRequested)
-                errorMessage = "The request timed out while waiting for Ollama. Please try again.";
+                errorMessage = "The request timed out while waiting for the AI provider. Please try again.";
         }
         finally
         {

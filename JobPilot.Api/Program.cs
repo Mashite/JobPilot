@@ -2,6 +2,7 @@ using JobPilot.Api.Data;
 using JobPilot.Api.Endpoints;
 using JobPilot.Api.Services;
 using JobPilot.Api.Services.Agent;
+using JobPilot.Api.Services.Ai;
 using Microsoft.EntityFrameworkCore;
 
 namespace JobPilot.Api;
@@ -22,6 +23,10 @@ internal static class Program
         builder.Services.AddScoped<JobMatchingService>();
         builder.Services.AddScoped<CandidateProfileValidator>();
         builder.Services.AddScoped<WordDocumentService>();
+        builder.Services.AddScoped<JobAnalysisService>();
+        builder.Services.AddScoped<ResumeGeneratorService>();
+        builder.Services.AddScoped<JobPilotAgentService>();
+        builder.Services.AddJobPilotAi(builder.Configuration);
 
         // Add services to the container.
 
@@ -30,34 +35,11 @@ internal static class Program
         builder.Services.AddOpenApi();
 
 
-        builder.Services.AddHttpClient<JobPilotAgentService>(client =>
-        {
-            client.BaseAddress = new Uri("http://localhost:11434/");
-            client.Timeout = TimeSpan.FromMinutes(5);
-        });
-
         builder.Services.AddHttpClient("JobPilotInternalApi", client =>
         {
             client.BaseAddress = new Uri("http://localhost:5287/");
             client.Timeout = TimeSpan.FromMinutes(5);
         });
-
-        builder.Services.AddHttpClient<OllamaService>(client =>
-        {
-            client.BaseAddress =
-                new Uri("http://localhost:11434/");
-
-            client.Timeout = TimeSpan.FromMinutes(5);
-        });
-
-        builder.Services.AddHttpClient<ResumeGeneratorService>(client =>
-        {
-            client.BaseAddress =
-                new Uri("http://localhost:11434/");
-
-            client.Timeout = TimeSpan.FromMinutes(5);
-        });
-
 
         var app = builder.Build();
 
