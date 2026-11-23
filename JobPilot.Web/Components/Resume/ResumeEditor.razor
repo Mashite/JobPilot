@@ -1,14 +1,16 @@
 @using JobPilot.Web.Models
+@using JobPilot.Web.Components.Profile
 
 @{
     var skills = Resume.TechnicalSkills.Where(HasText).ToList();
     var experienceEntries = Resume.Experiences.Where(HasExperienceContent).ToList();
     var projects = Resume.Projects.Where(HasText).ToList();
     var education = Resume.Education.Where(HasText).ToList();
+    var certifications = Resume.Certifications.Where(HasText).ToList();
     var hasIdentity = HasText(Resume.FullName) || HasText(Resume.ProfessionalTitle);
     var hasSummary = HasText(Resume.ProfessionalSummary);
     var hasContent = hasIdentity || hasSummary || skills.Count > 0 || experienceEntries.Count > 0 ||
-        projects.Count > 0 || education.Count > 0;
+        projects.Count > 0 || education.Count > 0 || certifications.Count > 0;
 }
 
 <section class="resume-editor" aria-label="Resume editor">
@@ -141,20 +143,15 @@
                     </section>
                 }
 
-                @if (Resume.Education.Count > 0)
-                {
-                    <section class="resume-form-section">
-                        <h4>Education</h4>
-                        <div class="editor-stack">
-                            @for (var i = 0; i < Resume.Education.Count; i++)
-                            {
-                                var index = i;
-                                <input class="form-control" aria-label="@($"Education entry {index + 1}")"
-                                       @bind="Resume.Education[index]" @bind:event="oninput" @bind:after="NotifyChanged" />
-                            }
-                        </div>
-                    </section>
-                }
+                <section class="resume-form-section">
+                    <h4>Education</h4>
+                    <ProfileLines @key="Resume" Label="Education entries" @bind-Values="Resume.Education" @bind-Values:after="NotifyChanged" />
+                </section>
+
+                <section class="resume-form-section">
+                    <h4>Certifications</h4>
+                    <ProfileLines @key="Resume" Label="Certification entries" @bind-Values="Resume.Certifications" @bind-Values:after="NotifyChanged" />
+                </section>
             </div>
         </div>
 
@@ -261,6 +258,16 @@
                                 }
                             </section>
                         }
+                        @if (certifications.Count > 0)
+                        {
+                            <section class="paper-section">
+                                <h6>Certifications</h6>
+                                @foreach (var entry in certifications)
+                                {
+                                    <p>@entry</p>
+                                }
+                            </section>
+                        }
                     </article>
                 </div>
             </div>
@@ -287,6 +294,7 @@
     private Task NotifyChanged() => ResumeChanged.InvokeAsync();
 
     public ValueTask FocusFullNameAsync() => fullNameInput.FocusAsync();
+    public ValueTask FocusEditorAsync() => editorHeading.FocusAsync();
 
     private static bool HasText(string? value) => !string.IsNullOrWhiteSpace(value);
 

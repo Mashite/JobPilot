@@ -14,6 +14,7 @@ public class GeneratedResume
     public List<string> Projects { get; set; } = [];
 
     public List<string> Education { get; set; } = [];
+    public List<string> Certifications { get; set; } = [];
 }
 
 public class ResumeExperience

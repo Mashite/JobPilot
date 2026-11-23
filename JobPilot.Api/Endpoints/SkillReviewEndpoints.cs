@@ -24,10 +24,10 @@ internal static class SkillReviewEndpoints
     private static async Task<IResult> ReviewAsync(SkillReviewRequest request, SkillNormalizer normalizer,
         CandidateProfileService profiles, JobMatchingService matching, bool save, CancellationToken cancellationToken)
     {
-        if (!request.Confirmed || request.ConfirmedSkills is not { } skills ||
-            !CandidateProfileService.AreValidSkills(skills))
+        if (!request.Confirmed || request.ConfirmedSkills is not { Count: > 0 and <= 100 } skills ||
+            skills.Any(skill => string.IsNullOrWhiteSpace(skill) || skill.Length > 4_000))
         {
-            return Results.BadRequest("Explicitly confirm between 1 and 100 valid skills of at most 120 characters.");
+            return Results.BadRequest("Explicitly confirm between 1 and 100 analyzed requirements.");
         }
 
         if (request.Analysis is not { Requirements: { Count: > 0 and <= 500 } requirements } analysis ||
@@ -36,17 +36,36 @@ internal static class SkillReviewEndpoints
             return Results.BadRequest("Analyze the job before reviewing its skills.");
         }
 
-        var requirementKeys = requirements.Select(requirement => normalizer.Normalize(requirement.Skill))
-            .ToHashSet(StringComparer.OrdinalIgnoreCase);
-        if (skills.Any(skill => !requirementKeys.Contains(normalizer.Normalize(skill))))
-            return Results.BadRequest("Confirm only skills in the analyzed job requirements.");
+        var byKey = matching.GetDistinctRequirements(analysis)
+            .ToDictionary(requirement => normalizer.Normalize(requirement.Skill), StringComparer.OrdinalIgnoreCase);
+        var keys = skills.Select(normalizer.Normalize).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        if (keys.Any(key => !byKey.ContainsKey(key)))
+            return Results.BadRequest("Confirm only analyzed job requirements.");
+        if (save && (!CandidateProfileService.AreValidSkills(skills) ||
+            keys.Any(key => !JobMatchingService.CanSaveAsProfileSkill(byKey[key]))))
+        {
+            return Results.BadRequest("Only verified skills can be saved here. Edit qualifications in Master CV.");
+        }
+
+        var evidence = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var (name, note) in request.ConfirmedEvidence ?? [])
+        {
+            var key = normalizer.Normalize(name);
+            if (!keys.Contains(key) || note is null || note.Length > 1000 || !evidence.TryAdd(key, note.Trim()))
+                return Results.BadRequest("Provide one evidence note of at most 1,000 characters per confirmed requirement.");
+        }
+        if (keys.Any(key => JobMatchingService.NeedsReviewEvidence(byKey[key]) &&
+            string.IsNullOrWhiteSpace(evidence.GetValueOrDefault(key))))
+        {
+            return Results.BadRequest("Cite supporting Master CV evidence for qualifications and minimum experience.");
+        }
 
         try
         {
             var profile = save
                 ? await profiles.AddVerifiedSkillsAsync(skills, cancellationToken)
                 : await profiles.GetProfileAsync(cancellationToken);
-            return Results.Ok(matching.Match(analysis, profile, save ? null : skills));
+            return Results.Ok(matching.Match(analysis, profile, save ? null : skills, save ? null : evidence));
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException or InvalidOperationException)
         {
@@ -57,5 +76,7 @@ internal static class SkillReviewEndpoints
         }
     }
 
-    private sealed record SkillReviewRequest(JobAnalysis? Analysis, List<string>? ConfirmedSkills, bool Confirmed);
+    private sealed record SkillReviewRequest(
+        JobAnalysis? Analysis, List<string>? ConfirmedSkills, bool Confirmed,
+        Dictionary<string, string?>? ConfirmedEvidence = null);
 }

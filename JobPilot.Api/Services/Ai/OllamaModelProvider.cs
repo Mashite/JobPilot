@@ -44,7 +44,7 @@ internal sealed class OllamaModelProvider(HttpClient client, string model) : IAi
     private static object MapMessage(AiMessage message) => message switch
     {
         AiUserMessage user => new { role = "user", content = user.Text },
-        AiAssistantMessage { ProviderContent: { } content } => content,
+        AiAssistantMessage { ProviderContent: JsonElement content } => content,
         AiAssistantMessage assistant => new
         {
             role = "assistant",

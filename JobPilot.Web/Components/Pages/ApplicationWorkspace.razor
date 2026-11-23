@@ -7,6 +7,7 @@
 @using JobPilot.Web.Components.Resume
 @inject IHttpClientFactory HttpClientFactory
 @inject ResumeWorkflow ResumeWorkflow
+@inject IJSRuntime JS
 
 <PageTitle>Application Workspace - JobPilot</PageTitle>
 
@@ -101,6 +102,23 @@
             }
             else
             {
+                @if (resumeVersions.Count > 0)
+                {
+                    <div class="card card-body">
+                        <label class="form-label" for="resume-version">Saved resume version</label>
+                        <select class="form-select" id="resume-version" @bind="versionToOpen" disabled="@IsBusy">
+                            @foreach (var version in resumeVersions)
+                            {
+                                <option value="@version.Id">Version @version.Id · @version.CreatedAtUtc.ToString("yyyy-MM-dd HH:mm") UTC</option>
+                            }
+                        </select>
+                        <div class="actions actions-spaced">
+                            <button type="button" class="btn btn-outline-primary"
+                                    disabled="@(IsBusy || versionToOpen is null || (versionToOpen == loadedVersion && !resumeHasEdits))"
+                                    @onclick="OpenResumeVersion">Open version</button>
+                        </div>
+                    </div>
+                }
                 <fieldset disabled="@IsBusy">
                     <ResumeEditor Resume="resume" ResumeChanged="HandleResumeChanged" @ref="resumeEditor" />
                 </fieldset>
@@ -184,6 +202,9 @@
     [Parameter]
     public int Id { get; set; }
 
+    [SupplyParameterFromQuery(Name = "tab")]
+    public string? RequestedTab { get; set; }
+
     private static readonly (WorkspaceTab Value, string Label)[] Tabs =
     [
         (WorkspaceTab.Job, "Job Details"),
@@ -195,6 +216,10 @@
     private CancellationTokenSource? applicationRequests;
     private JobApplicationDto? job;
     private GeneratedResume? resume;
+    private List<ResumeVersion> resumeVersions = [];
+    private int? versionToOpen;
+    private int? loadedVersion;
+    private bool resumeHasEdits;
     private ResumeEditor? resumeEditor;
     private bool isLoading = true;
     private string? loadError;
@@ -240,12 +265,15 @@
         var applicationId = Id;
 
         isLoading = true;
-        activeTab = WorkspaceTab.Job;
+        activeTab = RequestedTab == "resume" ? WorkspaceTab.Resume : WorkspaceTab.Job;
         pendingOperation = null;
         feedbackTab = null;
         loadError = resumeLoadError = errorMessage = successMessage = null;
         job = null;
         resume = null;
+        resumeVersions = [];
+        loadedVersion = versionToOpen = null;
+        resumeHasEdits = false;
 
         try
         {
@@ -289,18 +317,35 @@
 
     private async Task LoadSavedResume(HttpClient client, int applicationId, CancellationToken cancellationToken)
     {
-        using var response = await client.GetAsync($"api/applications/{applicationId}/resumes/latest", cancellationToken);
-        GeneratedResume? savedDraft = null;
-        if (response.StatusCode != HttpStatusCode.NotFound)
-        {
-            await response.EnsureJobPilotSuccessAsync(cancellationToken);
-            savedDraft = await response.Content.ReadFromJsonAsync<GeneratedResume>(cancellationToken)
-                ?? throw new InvalidOperationException("The API did not return the saved resume.");
-        }
+        var versions = await ResumeWorkflow.ListVersionsAsync(client, applicationId, cancellationToken);
+        if (versions.FirstOrDefault() is { } latest)
+            await LoadResumeVersion(client, applicationId, latest.Id, cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
+        resumeVersions = versions;
+        resumeLoadError = null;
+    }
 
+    private async Task OpenResumeVersion()
+    {
+        if (IsBusy || versionToOpen is not int versionId || (loadedVersion == versionId && !resumeHasEdits))
+            return;
+        var applicationId = Id;
+        if (resumeHasEdits && !await JS.InvokeAsync<bool>("confirm", "Discard unsaved changes and open this saved version?"))
+            return;
+        if (Id == applicationId)
+            await ExecuteAsync(Operation.LoadResume, (client, cancellationToken) =>
+                LoadResumeVersion(client, applicationId, versionId, cancellationToken));
+    }
+
+    private async Task LoadResumeVersion(HttpClient client, int applicationId, int versionId, CancellationToken cancellationToken)
+    {
+        var savedDraft = await client.GetFromJsonAsync<GeneratedResume>(
+            $"api/applications/{applicationId}/resumes/{versionId}", cancellationToken)
+            ?? throw new InvalidOperationException("The API did not return the saved resume.");
         cancellationToken.ThrowIfCancellationRequested();
         resume = savedDraft;
-        resumeLoadError = null;
+        loadedVersion = versionToOpen = versionId;
+        resumeHasEdits = false;
     }
 
     private Task GenerateResume()
@@ -317,6 +362,7 @@
             var draft = await response.Content.ReadFromJsonAsync<GeneratedResume>(cancellationToken);
             cancellationToken.ThrowIfCancellationRequested();
             resume = draft ?? throw new InvalidOperationException("The API did not return a resume draft.");
+            resumeHasEdits = true;
         });
     }
 
@@ -328,9 +374,12 @@
         var applicationId = Id;
         await ExecuteAsync(Operation.SaveResume, async (client, cancellationToken) =>
         {
-            await ResumeWorkflow.SaveAsync(client, applicationId, draft, cancellationToken);
+            var result = await ResumeWorkflow.SaveAsync(client, applicationId, draft, cancellationToken);
             cancellationToken.ThrowIfCancellationRequested();
-            successMessage = "Resume saved successfully.";
+            loadedVersion = versionToOpen = result.Id;
+            resumeHasEdits = false;
+            successMessage = result.Created ? "Resume version saved." : "This resume version was already saved.";
+            resumeVersions = await ResumeWorkflow.ListVersionsAsync(client, applicationId, cancellationToken);
         });
     }
 
@@ -361,6 +410,7 @@
 
     private void HandleResumeChanged()
     {
+        resumeHasEdits = true;
         if (feedbackTab == WorkspaceTab.Resume)
             successMessage = null;
     }

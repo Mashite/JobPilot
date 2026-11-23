@@ -7,6 +7,7 @@
 @using JobPilot.Web.Components.Resume
 @inject IHttpClientFactory HttpClientFactory
 @inject IJSRuntime JS
+@inject ResumeWorkflow ResumeWorkflow
 
 <PageTitle>Job Analyzer - JobPilot</PageTitle>
 
@@ -16,6 +17,8 @@
 </div>
 
 <div class="analysis-workspace page-stack">
+    @if (!resumeDraft.IsEditing)
+    {
     <div class="analysis-grid">
         <section class="card analyzer-input" aria-labelledby="job-input-heading">
             <div class="card-body">
@@ -82,7 +85,7 @@
 
         <section class="card match-panel" aria-labelledby="match-heading">
             <div class="card-body">
-                <h3 id="match-heading">Match analysis</h3>
+                <h3 id="match-heading" tabindex="-1" @ref="matchHeading">Match analysis</h3>
 
                 @if (pendingOperation == Operation.Analyze)
                 {
@@ -105,7 +108,13 @@
                     var score = Math.Clamp(reviewPreview?.MatchScore ?? match.MatchScore, 0, 100);
                     var stagedSkills = skillReview?.Staged.ToArray() ?? [];
                     var confirmedSkills = skillReview?.Confirmed.ToArray() ?? [];
-                    var unmatchedSkills = skillReview?.Unmatched.ToArray() ?? [.. match.MissingOrUnverifiedSkills];
+                    var matchDetails = match.RequirementMatches.ToDictionary(item => item.Requirement.Skill, StringComparer.Ordinal);
+                    var hasSavableSkills = confirmedSkills.Any(CanSaveProfileSkill);
+                    var needsEvidence = stagedSkills.Any(skill =>
+                        matchDetails.GetValueOrDefault(skill)?.RequiresReviewEvidence == true &&
+                        string.IsNullOrWhiteSpace(skillReview?.EvidenceFor(skill)));
+                    var unmatchedSkills = match.MissingOrUnverifiedSkills
+                        .Where(skill => !stagedSkills.Contains(skill) && !confirmedSkills.Contains(skill)).ToArray();
 
                     <div class="match-summary">
                         <div class="score-ring" style="@($"--match-score: {score}%")"
@@ -121,16 +130,20 @@
                                 <p class="match-title break-word">@match.JobTitle</p>
                             }
                             <p class="text-muted">@(reviewPreview is null
-                                ? "Based on skills verified in your profile."
+                                ? "Exact matches count toward the score. Required items carry more weight than preferred items."
                                 : $"With confirmed review skills. Master profile score: {match.MatchScore}%.")</p>
                         </div>
                     </div>
+                    @foreach (var warning in match.Warnings)
+                    {
+                        <div class="alert alert-warning" role="status">@warning</div>
+                    }
 
                     <div class="skill-groups">
                         <section class="skill-panel matched" aria-labelledby="matched-heading"
                                  @ondragover:preventDefault @ondrop:preventDefault @ondrop="DropInMatched">
                             <h4 id="matched-heading" tabindex="-1" @ref="matchedHeading">
-                                Matched Skills <span class="skill-count">@(match.MatchingSkills.Count + stagedSkills.Length + confirmedSkills.Length)</span>
+                                Matched requirements <span class="skill-count">@((reviewPreview ?? match).MatchingSkills.Count)</span>
                             </h4>
                             @if (match.MatchingSkills.Count + stagedSkills.Length + confirmedSkills.Length == 0)
                             {
@@ -141,16 +154,40 @@
                                 <ul class="skill-list">
                                     @foreach (var skill in match.MatchingSkills)
                                     {
-                                        <li>@skill <small>Verified in profile</small></li>
+                                        <li>
+                                            @skill
+                                            @RenderRequirementEvidence(matchDetails.GetValueOrDefault(skill))
+                                            @if (skillReview?.EvidenceFor(skill) is { } savedNote && !string.IsNullOrWhiteSpace(savedNote))
+                                            {
+                                                <small>Review evidence: @savedNote</small>
+                                            }
+                                        </li>
                                     }
                                     @foreach (var skill in stagedSkills.Concat(confirmedSkills))
                                     {
+                                        var isStaged = stagedSkills.Contains(skill);
+                                        var detail = matchDetails.GetValueOrDefault(skill);
                                         <li @key="skill" draggable="@(!IsBusy ? "true" : "false")"
                                             @ondragstart="() => StartSkillDrag(skill, fromMatched: true)" @ondragend="ClearSkillDrag">
                                             @skill
-                                            <small>@(stagedSkills.Contains(skill) ? "Needs confirmation" : "Confirmed · unsaved")</small>
+                                            <small>@(isStaged ? "Needs confirmation" : CanSaveProfileSkill(skill)
+                                                ? "Confirmed · skill not saved to Master CV" : "Confirmed · this job review only")</small>
+                                            @if (isStaged)
+                                            {
+                                                @RenderRequirementEvidence(detail)
+                                                <label>
+                                                    <span>Master CV evidence for @skill @(detail?.RequiresReviewEvidence == true ? "(required)" : "(optional)")</span>
+                                                    <textarea class="form-control" rows="2" maxlength="1000" disabled="@IsBusy"
+                                                              value="@skillReview?.EvidenceFor(skill)"
+                                                              @oninput="args => skillReview?.SetEvidence(skill, args.Value?.ToString() ?? string.Empty)"></textarea>
+                                                </label>
+                                            }
+                                            else if (skillReview?.EvidenceFor(skill) is { } note && !string.IsNullOrWhiteSpace(note))
+                                            {
+                                                <small>Review evidence: @note</small>
+                                            }
                                             <button type="button" class="btn btn-outline-primary skill-move" disabled="@IsBusy"
-                                                    aria-label="@($"Return {skill} to Unmatched Skills")"
+                                                    aria-label="@($"Return {skill} to related and missing requirements")"
                                                     @onclick="() => ReturnSkill(skill, focusHeading: true)">Return</button>
                                         </li>
                                     }
@@ -161,7 +198,7 @@
                         <section class="skill-panel unverified" aria-labelledby="unverified-heading"
                                  @ondragover:preventDefault @ondrop:preventDefault @ondrop="DropInUnmatched">
                             <h4 id="unverified-heading" tabindex="-1" @ref="unmatchedHeading">
-                                Unmatched Skills <span class="skill-count">@unmatchedSkills.Length</span>
+                                Related and missing requirements <span class="skill-count">@unmatchedSkills.Length</span>
                             </h4>
                             @if (unmatchedSkills.Length == 0)
                             {
@@ -169,18 +206,29 @@
                             }
                             else
                             {
-                                <ul class="skill-list">
-                                    @foreach (var skill in unmatchedSkills)
+                                @foreach (var (status, label) in new[] { ("related", "Related or partial matches"), ("missing", "Missing requirements") })
+                                {
+                                    var group = unmatchedSkills.Where(skill =>
+                                        (matchDetails.GetValueOrDefault(skill)?.Status ?? "missing") == status).ToArray();
+                                    @if (group.Length > 0)
                                     {
-                                        <li @key="skill" draggable="@(!IsBusy ? "true" : "false")"
-                                            @ondragstart="() => StartSkillDrag(skill, fromMatched: false)" @ondragend="ClearSkillDrag">
-                                            @skill
-                                            <button type="button" class="btn btn-outline-primary skill-move" disabled="@IsBusy"
-                                                    aria-label="@($"Move {skill} to Matched Skills for review")"
-                                                    @onclick="() => StageSkill(skill, focusHeading: true)">Move to Matched</button>
-                                        </li>
+                                        <h5 class="actions-spaced">@label</h5>
+                                        <ul class="skill-list">
+                                            @foreach (var skill in group)
+                                            {
+                                                var detail = matchDetails.GetValueOrDefault(skill);
+                                                <li @key="skill" draggable="@(!IsBusy ? "true" : "false")"
+                                                    @ondragstart="() => StartSkillDrag(skill, fromMatched: false)" @ondragend="ClearSkillDrag">
+                                                    @skill
+                                                    @RenderRequirementEvidence(detail)
+                                                    <button type="button" class="btn btn-outline-primary skill-move" disabled="@IsBusy"
+                                                            aria-label="@($"Move {skill} to Matched Skills for review")"
+                                                            @onclick="() => StageSkill(skill, focusHeading: true)">Move to Matched</button>
+                                                </li>
+                                            }
+                                        </ul>
                                     }
-                                </ul>
+                                }
                             }
                         </section>
                     </div>
@@ -188,18 +236,18 @@
                     @if (stagedSkills.Length + confirmedSkills.Length > 0)
                     {
                         <div class="skill-review-actions">
-                            <p class="text-muted" role="status">@stagedSkills.Length awaiting confirmation · @confirmedSkills.Length confirmed and unsaved</p>
+                            <p class="text-muted" role="status">@stagedSkills.Length awaiting confirmation · @confirmedSkills.Length manually confirmed</p>
                             @if (stagedSkills.Length > 0)
                             {
-                                <p id="skill-confirmation-note">Confirm these selected skills only if you genuinely possess them.</p>
+                                <p id="skill-confirmation-note">Confirm only requirements you genuinely meet. Cite a Master CV entry for qualifications and include dates when minimum experience applies. To prioritize a work entry in the resume, quote one of its saved responsibilities or achievements exactly.</p>
                             }
                             <div class="actions">
                                 @if (stagedSkills.Length > 0)
                                 {
-                                    <button type="button" class="btn btn-outline-primary" disabled="@IsBusy"
-                                            aria-describedby="skill-confirmation-note" @onclick="ConfirmSkills">I have these skills</button>
+                                    <button type="button" class="btn btn-outline-primary" disabled="@(IsBusy || needsEvidence)"
+                                            aria-describedby="skill-confirmation-note" @onclick="ConfirmSkills">Confirm requirements</button>
                                 }
-                                @if (confirmedSkills.Length > 0)
+                                @if (hasSavableSkills)
                                 {
                                     <button type="button" class="btn btn-primary" disabled="@(IsBusy || stagedSkills.Length > 0)"
                                             @onclick="SaveProfileSkills">Save to Master Profile</button>
@@ -230,29 +278,43 @@
 
                     @if (originalMatch is { } original)
                     {
+                        var originalDetails = original.RequirementMatches.ToDictionary(item => item.Requirement.Skill, StringComparer.Ordinal);
                         <details class="match-evidence">
                             <summary>Original analysis (@original.MatchScore%)</summary>
                             <ul class="break-word">
                                 @foreach (var requirement in original.Requirements)
                                 {
-                                    <li>@requirement.Skill (@requirement.Importance) · @(original.MatchingSkills.Contains(requirement.Skill) ? "Automatically matched" : "Originally unmatched")</li>
+                                    var status = originalDetails.GetValueOrDefault(requirement.Skill)?.Status;
+                                    <li>@requirement.Skill (@requirement.Importance) · @(status switch
+                                        {
+                                            "exact" => "Exact match",
+                                            "related" => "Related or partial",
+                                            "missing" => "Missing",
+                                            _ => original.MatchingSkills.Contains(requirement.Skill) ? "Automatically matched" : "Originally unmatched"
+                                        })</li>
                                 }
                             </ul>
+                            @foreach (var (label, entries) in new[]
+                            {
+                                ("Experience requirements", original.ExperienceRequirements),
+                                ("Technologies", original.Technologies),
+                                ("Responsibilities", original.Responsibilities)
+                            })
+                            {
+                                @if (entries.Count > 0)
+                                {
+                                    <h5 class="actions-spaced">@label</h5>
+                                    <ul class="break-word">
+                                        @foreach (var entry in entries)
+                                        {
+                                            <li>@entry</li>
+                                        }
+                                    </ul>
+                                }
+                            }
                         </details>
                     }
 
-                    @if (match.Evidence.Count > 0)
-                    {
-                        <details class="match-evidence">
-                            <summary>Supporting evidence <span class="field-note">(@match.Evidence.Count)</span></summary>
-                            <ul class="break-word">
-                                @foreach (var evidence in match.Evidence)
-                                {
-                                    <li>@evidence</li>
-                                }
-                            </ul>
-                        </details>
-                    }
                 }
             </div>
         </section>
@@ -264,13 +326,22 @@
                 <h3 id="resume-heading">Tailored resume</h3>
                 <p class="text-muted">Generate a draft from your profile and the job description, then review and edit it.</p>
             </div>
-            <button type="button" class="btn btn-outline-primary" disabled="@IsBusy" @onclick="GenerateResume">
+            <button type="button" class="btn btn-primary" disabled="@(IsBusy || matchResult is null)" @onclick="OpenOrGenerateResume">
                 @if (pendingOperation == Operation.GenerateResume)
                 {
                     <span class="ui-spinner" aria-hidden="true"></span>
                 }
-                @(pendingOperation == Operation.GenerateResume ? "Generating..." : "Generate Resume")
+                @(pendingOperation == Operation.GenerateResume ? "Generating..." :
+                    resume is null ? "Generate Tailored Resume" : "Open Resume Editor")
             </button>
+            @if (resume is not null)
+            {
+                <div class="workflow-feedback">
+                    <button type="button" class="btn btn-outline-primary" disabled="@IsBusy" @onclick="RegenerateResume">
+                        Regenerate draft
+                    </button>
+                </div>
+            }
             @if (pendingOperation == Operation.GenerateResume)
             {
                 <p class="section-status workflow-feedback" role="status">Preparing your resume draft...</p>
@@ -281,10 +352,20 @@
             }
         </div>
     </section>
+    }
 
-    @if (resume is not null)
+    @if (resumeDraft.IsEditing && resume is not null)
     {
         <section class="resume-region" aria-label="Resume draft">
+            <div class="actions">
+                <button type="button" class="btn btn-outline-primary" disabled="@IsBusy" @onclick="BackToMatching">
+                    Back to matching review
+                </button>
+                @if ((reviewPreview ?? matchResult) is { } review)
+                {
+                    <span class="text-muted">Reviewed match score @review.MatchScore%</span>
+                }
+            </div>
             <fieldset disabled="@IsBusy">
                 <ResumeEditor Resume="resume" ResumeChanged="HandleResumeChanged" @ref="resumeEditor" />
             </fieldset>
@@ -344,7 +425,7 @@
                             @(pendingOperation == Operation.SaveResume ? "Saving..." : "Save Resume")
                         </button>
                     }
-                    <a class="btn btn-outline-primary" href="@($"/applications/{applicationId}")">Open Saved Application</a>
+                    <a class="btn btn-outline-primary" href="@($"/applications/{applicationId}?tab=resume")">Open Saved Application</a>
                 }
                 else
                 {
@@ -385,7 +466,9 @@
     private int? savedApplicationId;
     private bool descriptionRequired;
     private ElementReference descriptionInput;
+    private ElementReference matchHeading;
     private ResumeEditor? resumeEditor;
+    private bool focusWorkflowPane;
 
     private JobMatchResult? matchResult;
     private JobMatchResult? originalMatch;
@@ -395,7 +478,8 @@
     private ElementReference matchedHeading;
     private ElementReference unmatchedHeading;
     private string? profileSaveMessage;
-    private GeneratedResume? resume;
+    private readonly JobResumeDraft resumeDraft = new();
+    private GeneratedResume? resume => resumeDraft.Resume;
 
     private bool IsBusy => pendingOperation.HasValue;
     private string ApplicationTitle => string.IsNullOrWhiteSpace(jobTitle) ? matchResult?.JobTitle?.Trim() ?? "" : jobTitle.Trim();
@@ -432,7 +516,7 @@
         skillReview = null;
         draggedSkill = null;
         profileSaveMessage = null;
-        resume = null;
+        resumeDraft.Reset();
         savedApplicationId = null;
         errorOperation = null;
         errorMessage = null;
@@ -449,7 +533,7 @@
         matchResult = await response.Content.ReadFromJsonAsync<JobMatchResult>()
             ?? throw new InvalidOperationException("The API did not return a match result.");
         originalMatch = matchResult;
-        skillReview = new SkillReviewState(matchResult.MissingOrUnverifiedSkills);
+        skillReview = CreateSkillReview(matchResult);
         reviewPreview = null;
         draggedSkill = null;
         profileSaveMessage = null;
@@ -505,31 +589,25 @@
             errorOperation = null;
     }
 
-    private Task ConfirmSkills()
-    {
-        if (IsBusy || skillReview is not { HasStaged: true } review)
-            return Task.CompletedTask;
-
-        review.Confirm();
-        return RefreshSkillPreview();
-    }
+    private Task ConfirmSkills() => SubmitSkillReview(save: false, includeStaged: true);
 
     private Task RefreshSkillPreview() => SubmitSkillReview(save: false);
     private Task SaveProfileSkills() => SubmitSkillReview(save: true);
 
-    private Task SubmitSkillReview(bool save)
+    private async Task SubmitSkillReview(bool save, bool includeStaged = false)
     {
         if (IsBusy || originalMatch is not { } original ||
-            skillReview is not { HasConfirmed: true } review || (save && review.HasStaged))
+            skillReview is not { } review || (save && review.HasStaged))
         {
-            return Task.CompletedTask;
+            return;
         }
 
-        if (!save)
-            reviewPreview = null;
-
-        var confirmedSkills = review.Confirmed.ToArray();
-        return ExecuteAsync(save ? Operation.SaveProfileSkills : Operation.PreviewSkills, async client =>
+        var confirmedSkills = (save ? review.Confirmed.Where(CanSaveProfileSkill)
+            : includeStaged ? review.Confirmed.Concat(review.Staged) : review.Confirmed).ToArray();
+        if (confirmedSkills.Length == 0)
+            return;
+        var saved = false;
+        await ExecuteAsync(save ? Operation.SaveProfileSkills : Operation.PreviewSkills, async client =>
         {
             using var request = new HttpRequestMessage(HttpMethod.Post,
                 save ? "api/profile/skills" : "api/jobs/skill-review/preview");
@@ -538,8 +616,13 @@
 
             request.Content = JsonContent.Create(new
             {
-                analysis = new { original.JobTitle, original.Requirements },
+                analysis = new
+                {
+                    original.JobTitle, original.Requirements, original.ExperienceRequirements,
+                    original.Technologies, original.Responsibilities
+                },
                 confirmedSkills,
+                confirmedEvidence = review.EvidenceFor(confirmedSkills),
                 confirmed = true
             });
 
@@ -556,23 +639,73 @@
             if (save)
             {
                 matchResult = updated;
-                skillReview = new SkillReviewState(updated.MissingOrUnverifiedSkills);
+                review.AcceptSavedMatches(updated.MatchingSkills);
                 reviewPreview = null;
-                profileSaveMessage = "Verified skills are in your master profile. The match score has been updated.";
+                saved = true;
+                profileSaveMessage = "Verified skills were saved to Master CV.";
             }
             else
             {
+                if (includeStaged)
+                    review.Confirm();
                 reviewPreview = updated;
             }
         });
+
+        if (saved && review.HasConfirmed)
+            await RefreshSkillPreview();
+    }
+
+    private Task OpenOrGenerateResume()
+    {
+        if (IsBusy || matchResult is null)
+            return Task.CompletedTask;
+        if (resume is not { } current)
+            return GenerateResume();
+        resumeDraft.Open(current);
+        focusWorkflowPane = true;
+        return Task.CompletedTask;
+    }
+
+    private async Task RegenerateResume()
+    {
+        if (!IsBusy && await JS.InvokeAsync<bool>("confirm", "Replace the current draft? Previously saved versions will remain available."))
+            await GenerateResume();
+    }
+
+    private void BackToMatching()
+    {
+        if (IsBusy)
+            return;
+        resumeDraft.Review();
+        focusWorkflowPane = true;
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!focusWorkflowPane)
+            return;
+        focusWorkflowPane = false;
+        if (resumeDraft.IsEditing && resumeEditor is not null)
+            await resumeEditor.FocusEditorAsync();
+        else
+            await matchHeading.FocusAsync();
     }
 
     private Task GenerateResume() => ExecuteAsync(Operation.GenerateResume, async client =>
     {
-        using var response = await client.PostAsJsonAsync("api/resumes/generate", new { jobDescription });
+        var hints = skillReview?.ResumeSkillHints.ToArray() ?? [];
+        using var response = await client.PostAsJsonAsync("api/resumes/generate", new
+        {
+            jobDescription,
+            confirmedSkills = hints,
+            confirmedEvidence = skillReview?.EvidenceFor(hints).Values.ToArray()
+        });
         await response.EnsureJobPilotSuccessAsync();
-        resume = await response.Content.ReadFromJsonAsync<GeneratedResume>()
+        var draft = await response.Content.ReadFromJsonAsync<GeneratedResume>()
             ?? throw new InvalidOperationException("The API did not return a resume draft.");
+        resumeDraft.Open(draft);
+        focusWorkflowPane = true;
         saveMessage = null;
     });
 
@@ -581,18 +714,7 @@
         if (IsBusy || resume is not { } draft || !await ValidateResumeNameAsync())
             return;
 
-        await ExecuteAsync(Operation.DownloadResume, async client =>
-        {
-            using var response = await client.PostAsJsonAsync("api/resumes/export-docx", draft);
-            await response.EnsureJobPilotSuccessAsync();
-
-            var bytes = await response.Content.ReadAsByteArrayAsync();
-            await JS.InvokeVoidAsync(
-                "jobPilot.downloadFile",
-                "JobPilotResume.docx",
-                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                Convert.ToBase64String(bytes));
-        });
+        await ExecuteAsync(Operation.DownloadResume, client => ResumeWorkflow.DownloadAsync(client, draft, CancellationToken.None));
     }
 
     private async Task SaveJob()
@@ -609,7 +731,8 @@
                     jobTitle = ApplicationTitle,
                     companyName,
                     jobDescription,
-                    matchScore = match.MatchScore,
+                    matchScore = (reviewPreview ?? match).MatchScore,
+                    reuseExisting = true,
                     resume
                 });
 
@@ -632,9 +755,8 @@
         await ExecuteAsync(Operation.SaveResume, async client =>
         {
             saveMessage = null;
-            using var response = await client.PostAsJsonAsync($"api/applications/{applicationId}/resumes", draft);
-            await response.EnsureJobPilotSuccessAsync();
-            saveMessage = "Resume saved to this application.";
+            var result = await ResumeWorkflow.SaveAsync(client, applicationId, draft, CancellationToken.None);
+            saveMessage = result.Created ? "Resume version saved to this application." : "This resume version was already saved.";
         });
     }
 
@@ -701,7 +823,42 @@
         public List<string> MissingOrUnverifiedSkills { get; set; } = [];
         public List<string> Evidence { get; set; } = [];
         public List<JobRequirement> Requirements { get; set; } = [];
+        public List<string> ExperienceRequirements { get; set; } = [];
+        public List<string> Technologies { get; set; } = [];
+        public List<string> Responsibilities { get; set; } = [];
+        public List<RequirementMatch> RequirementMatches { get; set; } = [];
+        public List<string> Warnings { get; set; } = [];
     }
 
-    public sealed record JobRequirement(string Skill, string Importance);
+    public sealed record JobRequirement(
+        string Skill, string Importance, string Category = "technology", int? MinimumExperienceMonths = null, string OriginalText = "");
+
+    public sealed record RequirementMatch(
+        JobRequirement Requirement, string Status, string? ProfileSkill, string Reason, bool CanConfirmSkill,
+        bool CanSaveToMasterProfile = false, bool RequiresReviewEvidence = false);
+
+    private static SkillReviewState CreateSkillReview(JobMatchResult result) => new(result.MissingOrUnverifiedSkills);
+
+    private bool CanSaveProfileSkill(string skill) => matchResult?.RequirementMatches
+        .FirstOrDefault(detail => detail.Requirement.Skill == skill)?.CanSaveToMasterProfile == true;
+
+    private static RenderFragment RenderRequirementEvidence(RequirementMatch? detail) => @<text>
+        @if (detail is not null)
+        {
+            <small>@(detail.Requirement.Importance == "required" ? "Required" : "Preferred") · @detail.Requirement.Category.Replace('_', ' ')</small>
+            @if (detail.Requirement.MinimumExperienceMonths is > 0 and var months)
+            {
+                <small>Minimum experience: @months months</small>
+            }
+            @if (!string.IsNullOrWhiteSpace(detail.Requirement.OriginalText))
+            {
+                <small>Posting: @detail.Requirement.OriginalText</small>
+            }
+            @if (detail.ProfileSkill is { } skill)
+            {
+                <small>Master CV: @skill</small>
+            }
+            <small>@detail.Reason</small>
+        }
+    </text>;
 }

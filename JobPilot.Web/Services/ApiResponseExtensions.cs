@@ -36,7 +36,8 @@ internal static class ApiResponseExtensions
                 return null;
 
             if (root.TryGetProperty("title", out var title) && title.ValueKind == JsonValueKind.String &&
-                title.GetString() == "AI request failed" && root.TryGetProperty("detail", out var detail) &&
+                title.GetString() is ("AI request failed" or "Master CV could not be loaded") &&
+                root.TryGetProperty("detail", out var detail) &&
                 detail.ValueKind == JsonValueKind.String)
             {
                 return detail.GetString();

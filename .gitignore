@@ -15,6 +15,11 @@ secrets.json
 /JobPilot.Api/Data/candidate-profile.json
 /JobPilot.Api/Data/candidate-profile.json.*
 JobPilotResume*.docx
+TailoredResume*.docx
+*.mdf
+*.ndf
+*.ldf
+*.bak
 
 # .NET build output and Visual Studio state
 [Bb]in/

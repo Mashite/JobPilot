@@ -40,6 +40,24 @@ public sealed class SkillReviewTests : IDisposable
     }
 
     [Fact]
+    public void SavingAProfileSkillKeepsTheQualificationAndItsEvidenceInTheReview()
+    {
+        var review = new SkillReviewState(["AWS", "Software design patterns"]);
+        review.Stage("AWS");
+        review.Stage("Software design patterns");
+        review.SetEvidence("Software design patterns", "  See the architecture project in Master CV.  ");
+        review.Confirm();
+
+        review.AcceptSavedMatches(["AWS"]);
+
+        Assert.Equal(["Software design patterns"], review.Confirmed);
+        Assert.Equal("See the architecture project in Master CV.",
+            review.EvidenceFor(review.Confirmed)["Software design patterns"]);
+        Assert.True(review.Return("Software design patterns"));
+        Assert.Null(review.EvidenceFor("Software design patterns"));
+    }
+
+    [Fact]
     public async Task ConfirmedSkillsRecalculateWeightedScoreBeforeAndAfterExplicitSave()
     {
         var (profiles, _) = await CreateProfileAsync();

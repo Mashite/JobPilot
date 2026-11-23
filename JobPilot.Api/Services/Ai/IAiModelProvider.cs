@@ -20,7 +20,7 @@ public sealed record AiUserMessage(string Text) : AiMessage;
 public sealed record AiAssistantMessage(string Text, IReadOnlyList<AiToolCall> ToolCalls) : AiMessage
 {
     // The originating adapter can replay the exact turn without exposing it to the agent.
-    internal JsonElement? ProviderContent { get; init; }
+    internal object? ProviderContent { get; init; }
 }
 public sealed record AiTool(string Name, string Description, JsonElement Parameters);
 public sealed record AiToolCall(string Name, JsonElement Arguments, string? Id = null);

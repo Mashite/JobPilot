@@ -18,6 +18,12 @@ public class WordDocumentService
             true))
         {
             var mainPart = document.AddMainDocumentPart();
+            var styles = mainPart.AddNewPart<StyleDefinitionsPart>();
+            styles.Styles = new Styles(
+                new Style(
+                    new StyleName { Val = "heading 1" },
+                    new StyleParagraphProperties(new KeepNext(), new OutlineLevel { Val = 0 }))
+                { Type = StyleValues.Paragraph, StyleId = "Heading1" });
 
             mainPart.Document = new Document(
                 new Body());
@@ -43,7 +49,7 @@ public class WordDocumentService
 
             AddParagraph(
                 body,
-                string.Join(" | ", resume.TechnicalSkills));
+                string.Join(", ", resume.TechnicalSkills.Where(item => !string.IsNullOrWhiteSpace(item))));
 
             // Experience
             AddHeading(body, "PROFESSIONAL EXPERIENCE");
@@ -59,7 +65,7 @@ public class WordDocumentService
                     body,
                     $"{experience.StartDate} – {experience.EndDate}");
 
-                foreach (var highlight in experience.Highlights)
+                foreach (var highlight in experience.Highlights.Where(item => !string.IsNullOrWhiteSpace(item)))
                 {
                     AddBullet(body, highlight);
                 }
@@ -87,6 +93,14 @@ public class WordDocumentService
                 }
             }
 
+            var certifications = (resume.Certifications ?? []).Where(item => !string.IsNullOrWhiteSpace(item)).ToArray();
+            if (certifications.Length > 0)
+            {
+                AddHeading(body, "CERTIFICATIONS");
+                foreach (var certification in certifications)
+                    AddParagraph(body, certification);
+            }
+
             mainPart.Document.Save();
         }
 
@@ -98,7 +112,7 @@ public class WordDocumentService
         string text)
     {
         AddParagraph(body, text,
-            bold: true, fontSize: "24");
+            bold: true, fontSize: "24", heading: true);
     }
 
     private static void AddBullet(
@@ -113,7 +127,8 @@ public class WordDocumentService
         Body body,
         string text,
         bool bold = false,
-        string fontSize = "21")
+        string fontSize = "21",
+        bool heading = false)
     {
         var runProperties = new RunProperties(
             new RunFonts
@@ -134,6 +149,8 @@ public class WordDocumentService
             });
 
         var paragraph = new Paragraph(run);
+        if (heading)
+            paragraph.PrependChild(new ParagraphProperties(new ParagraphStyleId { Val = "Heading1" }));
 
         body.Append(paragraph);
     }

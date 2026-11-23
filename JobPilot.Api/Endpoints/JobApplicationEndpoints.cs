@@ -22,7 +22,9 @@ internal static class JobApplicationEndpoints
         applications.MapGet("/{id:int}", GetApplication);
         applications.MapPatch("/{id:int}/status", UpdateStatus);
         applications.MapPost("/{id:int}/resumes", SaveResume);
+        applications.MapGet("/{id:int}/resumes", ListResumeVersions);
         applications.MapGet("/{id:int}/resumes/latest", GetLatestResume);
+        applications.MapGet("/{id:int}/resumes/{versionId:int}", GetResumeVersion);
     }
 
     private static async Task<IResult> ListApplications(
@@ -57,6 +59,22 @@ internal static class JobApplicationEndpoints
         if (request.Resume is not null && string.IsNullOrWhiteSpace(request.Resume.FullName))
             return Results.BadRequest("Resume full name is required.");
 
+        await using var transaction = request.ReuseExisting ? await db.Database.BeginTransactionAsync(cancellationToken) : null;
+        var existing = request.ReuseExisting
+            ? await LockApplications(db).Where(job => job.JobTitle == jobTitle && job.CompanyName == companyName &&
+                    job.JobDescription == jobDescription)
+                .OrderBy(job => job.Id).FirstOrDefaultAsync(cancellationToken)
+            : null;
+        if (existing is not null)
+        {
+            existing.MatchScore = request.MatchScore ?? existing.MatchScore;
+            if (request.Resume is not null)
+                await AddResumeIfChanged(db, existing.Id, request.Resume, cancellationToken);
+            await db.SaveChangesAsync(cancellationToken);
+            await transaction!.CommitAsync(cancellationToken);
+            return Results.Ok(ToDetails(existing));
+        }
+
         var application = new JobApplication
         {
             JobTitle = jobTitle,
@@ -70,6 +88,8 @@ internal static class JobApplicationEndpoints
 
         db.JobApplications.Add(application);
         await db.SaveChangesAsync(cancellationToken);
+        if (transaction is not null)
+            await transaction.CommitAsync(cancellationToken);
         return Results.Created($"/api/applications/{application.Id}", ToDetails(application));
     }
 
@@ -102,29 +122,76 @@ internal static class JobApplicationEndpoints
         if (string.IsNullOrWhiteSpace(resume.FullName))
             return Results.BadRequest("Resume full name is required.");
 
-        if (!await db.JobApplications.AnyAsync(job => job.Id == id, cancellationToken))
+        await using var transaction = await db.Database.BeginTransactionAsync(cancellationToken);
+        if (!await LockApplications(db).AnyAsync(job => job.Id == id, cancellationToken))
             return Results.NotFound();
 
-        var savedResume = CreateSavedResume(resume);
-        savedResume.JobApplicationId = id;
-        db.SavedResumes.Add(savedResume);
+        var (savedResume, added) = await AddResumeIfChanged(db, id, resume, cancellationToken);
         await db.SaveChangesAsync(cancellationToken);
-        return Results.Created($"/api/applications/{id}/resumes/latest", new { savedResume.Id });
+        await transaction.CommitAsync(cancellationToken);
+        var result = new { savedResume.Id };
+        return added ? Results.Created($"/api/applications/{id}/resumes/{savedResume.Id}", result) : Results.Ok(result);
     }
+
+    private static IQueryable<JobApplication> LockApplications(JobPilotDbContext db) =>
+        db.Database.IsSqlServer()
+            ? db.JobApplications.FromSqlRaw("SELECT * FROM [JobApplications] WITH (UPDLOCK, HOLDLOCK)")
+            : db.JobApplications;
+
+    private static async Task<(SavedResume Resume, bool Added)> AddResumeIfChanged(
+        JobPilotDbContext db, int id, GeneratedResume draft, CancellationToken cancellationToken)
+    {
+        var latest = await ResumeVersions(db, id).FirstOrDefaultAsync(cancellationToken);
+        var next = CreateSavedResume(draft);
+        if (latest is not null && CanonicalResumeJson(latest.ResumeJson) == next.ResumeJson)
+            return (latest, false);
+
+        next.JobApplicationId = id;
+        db.SavedResumes.Add(next);
+        return (next, true);
+    }
+
+    private static string CanonicalResumeJson(string json)
+    {
+        try
+        {
+            var previous = JsonSerializer.Deserialize<GeneratedResume>(json, JsonSerializerOptions.Web);
+            return previous is null ? json : JsonSerializer.Serialize(previous, JsonSerializerOptions.Web);
+        }
+        catch (JsonException)
+        {
+            return json;
+        }
+    }
+
+    private static IQueryable<SavedResume> ResumeVersions(JobPilotDbContext db, int id) =>
+        db.SavedResumes.AsNoTracking().Where(resume => resume.JobApplicationId == id)
+            .OrderByDescending(resume => resume.CreatedAtUtc).ThenByDescending(resume => resume.Id);
+
+    private static async Task<IResult> ListResumeVersions(
+        int id, JobPilotDbContext db, CancellationToken cancellationToken) =>
+        Results.Ok(await ResumeVersions(db, id).Select(resume => new { resume.Id, resume.CreatedAtUtc })
+            .ToListAsync(cancellationToken));
 
     private static async Task<IResult> GetLatestResume(
         int id, JobPilotDbContext db, CancellationToken cancellationToken)
     {
-        var resumeJson = await db.SavedResumes.AsNoTracking()
-            .Where(resume => resume.JobApplicationId == id)
-            .OrderByDescending(resume => resume.CreatedAtUtc)
-            .ThenByDescending(resume => resume.Id)
+        var resumeJson = await ResumeVersions(db, id)
             .Select(resume => resume.ResumeJson)
             .FirstOrDefaultAsync(cancellationToken);
 
         return resumeJson is null
             ? Results.NotFound()
             : Results.Content(resumeJson, "application/json");
+    }
+
+    private static async Task<IResult> GetResumeVersion(
+        int id, int versionId, JobPilotDbContext db, CancellationToken cancellationToken)
+    {
+        var json = await db.SavedResumes.AsNoTracking()
+            .Where(resume => resume.JobApplicationId == id && resume.Id == versionId)
+            .Select(resume => resume.ResumeJson).SingleOrDefaultAsync(cancellationToken);
+        return json is null ? Results.NotFound() : Results.Content(json, "application/json");
     }
 
     private static SavedResume CreateSavedResume(GeneratedResume resume) => new()
@@ -137,7 +204,8 @@ internal static class JobApplicationEndpoints
         application.MatchScore, application.Status, application.CreatedAtUtc);
 
     private sealed record CreateApplicationRequest(
-        string? JobTitle, string? CompanyName, string? JobDescription, int? MatchScore, GeneratedResume? Resume);
+        string? JobTitle, string? CompanyName, string? JobDescription, int? MatchScore, GeneratedResume? Resume,
+        bool ReuseExisting = false);
 
     private sealed record UpdateStatusRequest(string? Status);
 

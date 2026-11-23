@@ -29,7 +29,7 @@ internal sealed record AgentResumeResult(GeneratedResume? Resume, string? Error)
             var resume = result.Deserialize<GeneratedResume>(JsonSerializerOptions.Web);
             if (resume is null || string.IsNullOrWhiteSpace(resume.FullName) ||
                 !HasValidItems(resume.TechnicalSkills) || !HasValidItems(resume.Projects) ||
-                !HasValidItems(resume.Education) || resume.Experiences is null ||
+                !HasValidItems(resume.Education) || !HasValidItems(resume.Certifications) || resume.Experiences is null ||
                 resume.Experiences.Any(experience => experience is null || !HasValidItems(experience.Highlights)))
             {
                 return new(null, invalidResume);

@@ -7,6 +7,7 @@ using JobPilot.Api.Services.Agent;
 using JobPilot.Api.Services.Ai;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace JobPilot.Tests;
 
@@ -21,7 +22,7 @@ public sealed class AiProviderTests
         var handler = new FakeHttp(
             JsonReply(gemini, "Extracted requirements."), JsonReply(gemini, analysisJson));
         using var client = CreateClient(handler);
-        var service = new JobAnalysisService(CreateProvider(gemini, client));
+        var service = new JobAnalysisService(CreateProvider(gemini, client), new SkillNormalizer());
 
         Assert.Equal("Extracted requirements.", await service.AnalyzeJobAsync("A job listing."));
         var analysis = await service.ExtractRequirementsAsync("A job listing.");
@@ -53,7 +54,7 @@ public sealed class AiProviderTests
     public async Task ExtractionRejectsMalformedStructuredOutput(string content)
     {
         using var client = CreateClient(new FakeHttp(JsonReply(true, content)));
-        var service = new JobAnalysisService(new GeminiModelProvider(client, "test-model", "test-key"));
+        var service = new JobAnalysisService(CreateGemini(client), new SkillNormalizer());
 
         var error = await Assert.ThrowsAsync<AiProviderException>(() => service.ExtractRequirementsAsync("Listing"));
         Assert.Contains("job requirements", error.Message);
@@ -90,14 +91,14 @@ public sealed class AiProviderTests
             {
               "candidates": [{"finishReason":"STOP","content":{"role":"model","parts":[
                 {"text":"private thought","thought":true},
-                {"functionCall":{"id":"one","name":"analyze_job","args":{}},"thoughtSignature":"first"},
-                {"functionCall":{"id":"two","name":"generate_resume","args":{}}}
+                {"functionCall":{"id":"one","name":"analyze_job","args":{"jobDescription":"Listing"}},"thoughtSignature":"Zmlyc3Q="},
+                {"functionCall":{"id":"two","name":"generate_resume","args":{"jobDescription":"Listing"}}}
               ]}}]
             }
             """), JsonReply(true, "Both tools finished."));
         var tools = new FakeHttp(Response("""{"matchScore":82}"""), Response("""{"fullName":"Test Candidate"}"""));
         using var client = CreateClient(model);
-        var agent = new JobPilotAgentService(new GeminiModelProvider(client, "test-model", "test-key"),
+        var agent = new JobPilotAgentService(CreateGemini(client),
             new FakeClientFactory(tools));
 
         var reply = await agent.RunAsync(new AgentRequest("Analyze and draft.", "Original listing."));
@@ -110,7 +111,7 @@ public sealed class AiProviderTests
         Assert.True(declarations[0].TryGetProperty("parametersJsonSchema", out _));
         var history = model.Requests[1].Body.GetProperty("contents");
         Assert.Equal(3, history.GetArrayLength());
-        Assert.Equal("first", history[1].GetProperty("parts")[1].GetProperty("thoughtSignature").GetString());
+        Assert.Equal("Zmlyc3Q=", history[1].GetProperty("parts")[1].GetProperty("thoughtSignature").GetString());
         Assert.Equal("user", history[2].GetProperty("role").GetString());
         var responseParts = history[2].GetProperty("parts");
         Assert.Equal("one", responseParts[0].GetProperty("functionResponse").GetProperty("id").GetString());
@@ -120,13 +121,33 @@ public sealed class AiProviderTests
     }
 
     [Fact]
+    public async Task AgentPreservesSafeGeminiDiagnosticsFromAToolFailure()
+    {
+        const string toolCall = """{"candidates":[{"content":{"role":"model","parts":[{"functionCall":{"name":"analyze_job","args":{"jobDescription":"Listing"}}}]}}]}""";
+        using var client = CreateClient(new FakeHttp(Response(toolCall)));
+        await using var provider = CreateGemini(client);
+        var toolResponse = new HttpResponseMessage(HttpStatusCode.BadGateway)
+        {
+            Content = new StringContent("""
+                {"title":"AI request failed","detail":"Gemini denied access.","providerStatusCode":403,"diagnosticCode":"authentication_or_permission"}
+                """, Encoding.UTF8, "application/problem+json")
+        };
+        var agent = new JobPilotAgentService(provider, new FakeClientFactory(new FakeHttp(toolResponse)));
+
+        var error = await Assert.ThrowsAsync<AiProviderException>(() => agent.RunAsync(new AgentRequest("Analyze.", "Listing")));
+
+        Assert.Equal(403, error.ProviderStatusCode);
+        Assert.Equal("authentication_or_permission", error.DiagnosticCode);
+    }
+
+    [Fact]
     public async Task RepeatedCallsRetainDuplicateProtectionAndIterationLimit()
     {
-        const string packed = """{"candidates":[{"content":{"role":"model","parts":[{"functionCall":{"name":"analyze_job","args":{}}}]}}]}""";
+        const string packed = """{"candidates":[{"content":{"role":"model","parts":[{"functionCall":{"name":"analyze_job","args":{"jobDescription":"Listing"}}}]}}]}""";
         var model = new FakeHttp(Response(packed), Response(packed), Response(packed), Response(packed));
         var tools = new FakeHttp(Response("""{"matchScore":50}"""));
         using var client = CreateClient(model);
-        var agent = new JobPilotAgentService(new GeminiModelProvider(client, "test-model", "test-key"),
+        var agent = new JobPilotAgentService(CreateGemini(client),
             new FakeClientFactory(tools));
 
         var reply = await agent.RunAsync(new AgentRequest("Analyze repeatedly.", "Original listing."));
@@ -141,20 +162,26 @@ public sealed class AiProviderTests
     }
 
     [Theory]
-    [InlineData(HttpStatusCode.TooManyRequests, 429, "quota")]
-    [InlineData(HttpStatusCode.NotFound, 502, "test-model")]
-    [InlineData(HttpStatusCode.ServiceUnavailable, 503, "unavailable")]
-    [InlineData(HttpStatusCode.GatewayTimeout, 504, "timed out")]
+    [InlineData(HttpStatusCode.BadRequest, 502, "invalid_request")]
+    [InlineData(HttpStatusCode.Unauthorized, 502, "authentication_or_permission")]
+    [InlineData(HttpStatusCode.Forbidden, 502, "authentication_or_permission")]
+    [InlineData(HttpStatusCode.NotFound, 502, "model_unavailable")]
+    [InlineData(HttpStatusCode.TooManyRequests, 429, "quota_or_rate_limit")]
+    [InlineData(HttpStatusCode.InternalServerError, 502, "temporary_provider_failure")]
+    [InlineData(HttpStatusCode.BadGateway, 502, "temporary_provider_failure")]
+    [InlineData(HttpStatusCode.ServiceUnavailable, 503, "temporary_provider_failure")]
+    [InlineData(HttpStatusCode.GatewayTimeout, 504, "temporary_provider_failure")]
     public async Task ProviderErrorsAreSafeAndDoNotTriggerFallback(HttpStatusCode status, int apiStatus, string expected)
     {
-        var handler = new FakeHttp(Response("""{"error":"test-key; private candidate data"}""", status));
+        var handler = new FakeHttp(GoogleError(status, "PERMISSION_DENIED"));
         using var client = CreateClient(handler);
-        var provider = new GeminiModelProvider(client, "test-model", "test-key");
+        var provider = CreateGemini(client);
 
         var error = await Assert.ThrowsAsync<AiProviderException>(() => provider.GenerateAsync(new AiRequest("", [new AiUserMessage("Test")])));
 
         Assert.Equal(apiStatus, error.StatusCode);
-        Assert.Contains(expected, error.Message);
+        Assert.Equal((int)status, error.ProviderStatusCode);
+        Assert.Equal(expected, error.DiagnosticCode);
         Assert.DoesNotContain("test-key", error.Message);
         Assert.DoesNotContain("private candidate data", error.Message);
         Assert.Single(handler.Requests);
@@ -164,7 +191,7 @@ public sealed class AiProviderTests
     public async Task GeminiRejectsMalformedProviderResponseAndHonorsCancellation()
     {
         using var client = CreateClient(new FakeHttp(Response("""{"candidates":[{}]}""")));
-        var provider = new GeminiModelProvider(client, "test-model", "test-key");
+        var provider = CreateGemini(client);
         var input = new AiRequest("", [new AiUserMessage("Test")]);
         var error = await Assert.ThrowsAsync<AiProviderException>(() => provider.GenerateAsync(input));
         Assert.Contains("malformed", error.Message);
@@ -188,21 +215,131 @@ public sealed class AiProviderTests
     }
 
     [Theory]
-    [InlineData(null, typeof(OllamaModelProvider))]
+    [InlineData(null, typeof(OpenAiModelProvider))]
+    [InlineData("OpenAI", typeof(OpenAiModelProvider))]
     [InlineData("oLLaMa", typeof(OllamaModelProvider))]
     [InlineData("Gemini", typeof(GeminiModelProvider))]
-    public void DependencyInjectionSelectsOnlyTheConfiguredProvider(string? name, Type expectedType)
+    public async Task DependencyInjectionSelectsOnlyTheConfiguredProvider(string? name, Type expectedType)
     {
         var configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
         {
             ["AI:Provider"] = name,
+            ["AI:OpenAI:ApiKey"] = "test-openai-key",
             ["AI:Gemini:Model"] = "models/test-model",
             ["AI:Gemini:ApiKey"] = "test-key"
         }).Build();
-        using var services = new ServiceCollection().AddJobPilotAi(configuration).BuildServiceProvider();
-        using var scope = services.CreateScope();
+        await using var services = new ServiceCollection().AddJobPilotAi(configuration).BuildServiceProvider();
+        await using var scope = services.CreateAsyncScope();
 
         Assert.IsType(expectedType, Assert.Single(scope.ServiceProvider.GetServices<IAiModelProvider>()));
+    }
+
+    [Fact]
+    public void GeminiRequiresConfiguredKeyAndDefaultsToFlashLite()
+    {
+        var settings = new Dictionary<string, string?> { ["AI:Provider"] = "Gemini" };
+        var config = new ConfigurationBuilder().AddInMemoryCollection(settings).Build();
+        Assert.Contains("AI:Gemini:ApiKey",
+            Assert.Throws<InvalidOperationException>(() => new ServiceCollection().AddJobPilotAi(config)).Message);
+        config["AI:Gemini:ApiKey"] = "test-key";
+        using var services = new ServiceCollection().AddJobPilotAi(config).BuildServiceProvider();
+        Assert.Equal(new AiProviderSelection("Gemini", "gemini-3.1-flash-lite"),
+            services.GetRequiredService<AiProviderSelection>());
+    }
+
+    [Fact]
+    public async Task RetryHandlerRecoversFrom503AndPreservesSdkRequestWithoutLeakingErrorText()
+    {
+        var logger = new CapturingLogger();
+        var failed = GoogleError(HttpStatusCode.ServiceUnavailable, "UNAVAILABLE");
+        failed.Headers.RetryAfter = new System.Net.Http.Headers.RetryConditionHeaderValue(TimeSpan.Zero);
+        var http = new FakeHttp(failed, JsonReply(true, "Hello JobPilot."));
+        using var client = WithRetryHandler(http, logger);
+        await using var provider = CreateGemini(client);
+
+        var reply = await provider.GenerateAsync(Hello());
+
+        Assert.Equal("Hello JobPilot.", reply.Text);
+        Assert.Equal(2, http.Requests.Count);
+        Assert.Equal(http.Requests[0].Path, http.Requests[1].Path);
+        Assert.True(JsonElement.DeepEquals(http.Requests[0].Body, http.Requests[1].Body));
+        Assert.Equal("test-key", http.Requests[1].ApiKey);
+        var log = Assert.Single(logger.Messages);
+        Assert.Contains("503", log);
+        Assert.Contains("UNAVAILABLE", log);
+        Assert.DoesNotContain("private candidate data", log);
+        Assert.DoesNotContain("test-key", log);
+    }
+
+    [Fact]
+    public async Task RetryHandlerStopsAfterThreeQuotaFailures()
+    {
+        var responses = Enumerable.Range(0, 3).Select(_ =>
+        {
+            var response = GoogleError(HttpStatusCode.TooManyRequests, "RESOURCE_EXHAUSTED");
+            response.Headers.RetryAfter = new System.Net.Http.Headers.RetryConditionHeaderValue(TimeSpan.Zero);
+            return response;
+        }).ToArray();
+        var http = new FakeHttp(responses);
+        using var client = WithRetryHandler(http, new CapturingLogger());
+        await using var provider = CreateGemini(client);
+
+        var error = await Assert.ThrowsAsync<AiProviderException>(() => provider.GenerateAsync(Hello()));
+
+        Assert.Equal(429, error.ProviderStatusCode);
+        Assert.Equal(3, http.Requests.Count);
+    }
+
+    [Theory]
+    [InlineData(HttpStatusCode.BadRequest)]
+    [InlineData(HttpStatusCode.Unauthorized)]
+    [InlineData(HttpStatusCode.Forbidden)]
+    [InlineData(HttpStatusCode.NotFound)]
+    [InlineData(HttpStatusCode.ServiceUnavailable)]
+    public async Task RetryHandlerDoesNotRetryPermanentErrorsOrAnExcessiveRetryAfter(HttpStatusCode status)
+    {
+        var response = GoogleError(status, "PERMISSION_DENIED");
+        if (status == HttpStatusCode.ServiceUnavailable)
+            response.Headers.RetryAfter = new System.Net.Http.Headers.RetryConditionHeaderValue(TimeSpan.FromSeconds(60));
+        var logger = new CapturingLogger();
+        var http = new FakeHttp(response);
+        using var client = WithRetryHandler(http, logger);
+        await using var provider = CreateGemini(client);
+
+        var error = await Assert.ThrowsAsync<AiProviderException>(() => provider.GenerateAsync(Hello()));
+
+        Assert.Equal((int)status, error.ProviderStatusCode);
+        Assert.Single(http.Requests);
+        Assert.Contains("SERVICE_DISABLED", Assert.Single(logger.Messages));
+    }
+
+    [Fact]
+    public async Task GatewayHtmlRetainsUpstreamStatus()
+    {
+        using var client = CreateClient(new FakeHttp(new HttpResponseMessage(HttpStatusCode.ServiceUnavailable)
+        {
+            Content = new StringContent("<html>Service unavailable</html>", Encoding.UTF8, "text/html")
+        }));
+        await using var provider = CreateGemini(client);
+
+        var error = await Assert.ThrowsAsync<AiProviderException>(() => provider.GenerateAsync(Hello()));
+
+        Assert.Equal(503, error.ProviderStatusCode);
+        Assert.Equal("temporary_provider_failure", error.DiagnosticCode);
+    }
+
+    [Fact]
+    public async Task CancellationDuringBackoffPreventsAnotherRequest()
+    {
+        using var cancellation = new CancellationTokenSource();
+        var response = GoogleError(HttpStatusCode.ServiceUnavailable, "UNAVAILABLE");
+        response.Headers.RetryAfter = new System.Net.Http.Headers.RetryConditionHeaderValue(TimeSpan.FromSeconds(1));
+        var http = new FakeHttp(response);
+        using var client = WithRetryHandler(http, new CapturingLogger(cancellation.Cancel));
+        await using var provider = CreateGemini(client);
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => provider.GenerateAsync(Hello(), cancellation.Token));
+        Assert.Single(http.Requests);
     }
 
     [Theory]
@@ -227,8 +364,27 @@ public sealed class AiProviderTests
     }
 
     private static IAiModelProvider CreateProvider(bool gemini, HttpClient client) => gemini
-        ? new GeminiModelProvider(client, "test-model", "test-key")
+        ? CreateGemini(client)
         : new OllamaModelProvider(client, "test-model");
+
+    private static GeminiModelProvider CreateGemini(HttpClient client) =>
+        GeminiModelProvider.Create(() => client, "test-model", "test-key");
+
+    private static AiRequest Hello() => new("", [new AiUserMessage("Say Hello JobPilot.")]);
+
+    private static HttpClient WithRetryHandler(FakeHttp handler, CapturingLogger logger) =>
+        new(new GeminiRetryHandler(logger) { InnerHandler = handler });
+
+    private static HttpResponseMessage GoogleError(HttpStatusCode code, string status) =>
+        Response(JsonSerializer.Serialize(new { error = new
+        {
+            code = (int)code, status, message = "test-key; private candidate data",
+            details = new[] { new Dictionary<string, string>
+            {
+                ["@type"] = "type.googleapis.com/google.rpc.ErrorInfo",
+                ["reason"] = "SERVICE_DISABLED"
+            } }
+        } }), code);
 
     private static HttpClient CreateClient(FakeHttp handler) =>
         new(handler, disposeHandler: false) { BaseAddress = new Uri("https://test.invalid/") };
@@ -249,6 +405,19 @@ public sealed class AiProviderTests
     {
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>
             Task.FromException<HttpResponseMessage>(new TaskCanceledException());
+    }
+
+    private sealed class CapturingLogger(Action? onMessage = null) : ILogger<GeminiRetryHandler>
+    {
+        public List<string> Messages { get; } = [];
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+        public bool IsEnabled(LogLevel logLevel) => true;
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception,
+            Func<TState, Exception?, string> formatter)
+        {
+            Messages.Add(formatter(state, exception));
+            onMessage?.Invoke();
+        }
     }
 
     private sealed class FakeHttp(params HttpResponseMessage[] responses) : HttpMessageHandler

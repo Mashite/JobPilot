@@ -1,4 +1,7 @@
 <Solution>
+  <Folder Name="/Solution Items/">
+    <File Path=".gitignore" />
+  </Folder>
   <Project Path="JobPilot.Api/JobPilot.Api.csproj" />
   <Project Path="JobPilot.Tests/JobPilot.Tests.csproj" />
   <Project Path="JobPilot.Web/JobPilot.Web.csproj" />

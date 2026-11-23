@@ -1,3 +1,5 @@
+using System.Text.Json;
+using JobPilot.Api.Models;
 using JobPilot.Api.Models.Agent;
 using JobPilot.Api.Models.Resume;
 using JobPilot.Api.Services;
@@ -26,7 +28,12 @@ internal static class JobPilotEndpoints
         }
         catch (AiProviderException ex)
         {
-            return Results.Problem(title: "AI request failed", detail: ex.Message, statusCode: ex.StatusCode);
+            return Results.Problem(title: "AI request failed", detail: ex.Message, statusCode: ex.StatusCode,
+                extensions: new Dictionary<string, object?>
+                {
+                    ["providerStatusCode"] = ex.ProviderStatusCode,
+                    ["diagnosticCode"] = ex.DiagnosticCode
+                });
         }
     }
 
@@ -47,20 +54,53 @@ internal static class JobPilotEndpoints
         CandidateProfileService profileService,
         JobAnalysisService analysis,
         JobMatchingService matchingService,
+        AiProviderSelection activeProvider,
+        ILogger<JobMatchingService> logger,
         CancellationToken cancellationToken)
     {
         if (string.IsNullOrWhiteSpace(request.JobDescription))
             return Results.BadRequest("Job description is required.");
 
-        var profile = await profileService.GetProfileAsync(cancellationToken);
-        var jobAnalysis = await analysis.ExtractRequirementsAsync(
-            request.JobDescription, cancellationToken);
-        var matchResult = matchingService.Match(jobAnalysis, profile);
-        return Results.Ok(matchResult);
+        var stage = "profile_load";
+        string? errorType = null;
+        int? verifiedCount = null;
+        JobAnalysis? extracted = null;
+        JobMatchResult? match = null;
+        try
+        {
+            var profile = await profileService.GetProfileAsync(cancellationToken);
+            verifiedCount = profile.TechnicalSkills?.Count(skill => !string.IsNullOrWhiteSpace(skill)) ?? 0;
+            stage = "extraction";
+            extracted = await analysis.ExtractRequirementsAsync(request.JobDescription, cancellationToken);
+            stage = "matching";
+            match = matchingService.Match(extracted, profile);
+            stage = "completed";
+            return Results.Ok(match);
+        }
+        catch (Exception ex)
+        {
+            errorType = ex.GetType().Name;
+            if (stage == "profile_load" && ex is (IOException or UnauthorizedAccessException or JsonException or InvalidOperationException))
+            {
+                return Results.Problem(title: "Master CV could not be loaded",
+                    detail: "Open Master CV and check that the configured profile file is available and readable.",
+                    statusCode: StatusCodes.Status503ServiceUnavailable);
+            }
+            throw;
+        }
+        finally
+        {
+            logger.Log(errorType is null ? LogLevel.Information : LogLevel.Warning,
+                "Job match provider {Provider} model {Model} stage {Stage} extraction succeeded {ExtractionSucceeded} extracted requirements {ExtractedRequirements} normalized requirements {NormalizedRequirements} verified profile skills {VerifiedSkills} normalized verified skills {NormalizedVerifiedSkills} exact {ExactMatches} related {RelatedMatches} missing {MissingRequirements} score {MatchScore} error type {ErrorType}",
+                activeProvider.Name, activeProvider.Model, stage, extracted is not null, extracted?.ExtractedItemCount,
+                match?.Requirements.Count, verifiedCount, match?.NormalizedVerifiedSkillCount, match?.MatchingSkills.Count,
+                match?.RequirementMatches.Count(item => item.Status == "related"),
+                match?.RequirementMatches.Count(item => item.Status == "missing"), match?.MatchScore, errorType);
+        }
     }
 
     private static async Task<IResult> GenerateResume(
-        AnalyzeJobRequest request,
+        GenerateResumeRequest request,
         CandidateProfileService profileService,
         CandidateProfileValidator validator,
         ResumeGeneratorService resumeGenerator,
@@ -79,7 +119,8 @@ internal static class JobPilotEndpoints
             });
         }
 
-        var resume = await resumeGenerator.GenerateAsync(request.JobDescription, profile, cancellationToken);
+        var resume = await resumeGenerator.GenerateAsync(
+            request.JobDescription, profile, cancellationToken, request.ConfirmedSkills, request.ConfirmedEvidence);
         return Results.Ok(resume);
     }
 

@@ -13,4 +13,15 @@ public class JobMatchResult
 
     public List<string> Evidence { get; set; } = [];
     public List<JobRequirement> Requirements { get; set; } = [];
+    public List<string> ExperienceRequirements { get; set; } = [];
+    public List<string> Technologies { get; set; } = [];
+    public List<string> Responsibilities { get; set; } = [];
+    public List<RequirementMatch> RequirementMatches { get; set; } = [];
+    public List<string> Warnings { get; set; } = [];
+    public int VerifiedSkillCount { get; set; }
+    public int NormalizedVerifiedSkillCount { get; set; }
 }
+
+public sealed record RequirementMatch(
+    JobRequirement Requirement, string Status, string? ProfileSkill, string Reason, bool CanConfirmSkill,
+    bool CanSaveToMasterProfile = false, bool RequiresReviewEvidence = false, string? ReviewEvidence = null);

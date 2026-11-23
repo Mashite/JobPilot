@@ -14,7 +14,7 @@ public sealed class JobPilotAgentService(IAiModelProvider provider, IHttpClientF
         Use analyze_job to compare a job with the candidate profile.
         Use generate_resume to draft a tailored resume.
         If asked to analyze and generate a resume, perform both operations.
-        Use the supplied job description. Do not call the same tool repeatedly.
+        Use the supplied job description as the jobDescription tool argument. Do not call the same tool repeatedly.
 
         Never invent candidate experience or qualifications.
         Never claim to have submitted or saved applications.
@@ -25,7 +25,8 @@ public sealed class JobPilotAgentService(IAiModelProvider provider, IHttpClientF
     {
         type = "object",
         properties = new { jobDescription = new { type = "string", description = "The complete job description." } },
-        required = new[] { "jobDescription" }
+        required = new[] { "jobDescription" },
+        additionalProperties = false
     });
 
     private static readonly AiTool[] Tools =
@@ -71,6 +72,8 @@ public sealed class JobPilotAgentService(IAiModelProvider provider, IHttpClientF
                     result = Error("Tool already executed.");
                 else if (string.IsNullOrWhiteSpace(jobDescription))
                     result = Error("Job description is required.");
+                else if (!HasValidArguments(call.Arguments))
+                    result = Error("Tool arguments must contain one non-empty jobDescription string.");
                 else
                 {
                     // Use the user-supplied description. Model-generated arguments do not control business actions.
@@ -85,6 +88,13 @@ public sealed class JobPilotAgentService(IAiModelProvider provider, IHttpClientF
         return new("The agent reached its execution limit. " + BuildSummary(executedTools), executedTools);
     }
 
+    private static bool HasValidArguments(JsonElement arguments) =>
+        arguments.ValueKind == JsonValueKind.Object &&
+        arguments.EnumerateObject().Count() == 1 &&
+        arguments.TryGetProperty("jobDescription", out var description) &&
+        description.ValueKind == JsonValueKind.String &&
+        !string.IsNullOrWhiteSpace(description.GetString());
+
     private async Task<JsonElement> ExecuteToolAsync(string endpoint, string jobDescription, CancellationToken cancellationToken)
     {
         try
@@ -97,7 +107,14 @@ public sealed class JobPilotAgentService(IAiModelProvider provider, IHttpClientF
                 {
                     var problem = await response.Content.ReadFromJsonAsync<ProblemDetails>(cancellationToken);
                     if (problem?.Title == "AI request failed" && !string.IsNullOrWhiteSpace(problem.Detail))
-                        throw new AiProviderException(problem.Detail, (int)response.StatusCode);
+                    {
+                        problem.Extensions.TryGetValue("providerStatusCode", out var providerStatus);
+                        problem.Extensions.TryGetValue("diagnosticCode", out var diagnostic);
+                        throw new AiProviderException(problem.Detail, (int)response.StatusCode,
+                            providerStatus is JsonElement { ValueKind: JsonValueKind.Number } number && number.TryGetInt32(out var status)
+                                ? status : null,
+                            diagnostic is JsonElement { ValueKind: JsonValueKind.String } code ? code.GetString() : null);
+                    }
                 }
 
                 throw new AiProviderException($"The JobPilot tool returned HTTP {(int)response.StatusCode}.");

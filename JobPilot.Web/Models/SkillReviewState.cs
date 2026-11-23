@@ -5,10 +5,13 @@ internal sealed class SkillReviewState(IEnumerable<string> unmatchedSkills)
     private readonly string[] originalUnmatched = unmatchedSkills.Distinct(StringComparer.Ordinal).ToArray();
     private readonly HashSet<string> staged = new(StringComparer.Ordinal);
     private readonly HashSet<string> confirmed = new(StringComparer.Ordinal);
+    private readonly HashSet<string> saved = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, string> evidence = new(StringComparer.Ordinal);
 
     public IEnumerable<string> Unmatched => originalUnmatched.Where(skill => !staged.Contains(skill) && !confirmed.Contains(skill));
     public IEnumerable<string> Staged => originalUnmatched.Where(staged.Contains);
     public IEnumerable<string> Confirmed => originalUnmatched.Where(confirmed.Contains);
+    public IEnumerable<string> ResumeSkillHints => originalUnmatched.Where(skill => confirmed.Contains(skill) || saved.Contains(skill));
     public bool HasStaged => staged.Count > 0;
     public bool HasConfirmed => confirmed.Count > 0;
 
@@ -18,7 +21,29 @@ internal sealed class SkillReviewState(IEnumerable<string> unmatchedSkills)
     public bool Return(string skill)
     {
         staged.Remove(skill);
+        evidence.Remove(skill);
         return confirmed.Remove(skill);
+    }
+
+    public string? EvidenceFor(string skill) => evidence.GetValueOrDefault(skill);
+
+    public void SetEvidence(string skill, string note)
+    {
+        if (staged.Contains(skill))
+            evidence[skill] = note;
+    }
+
+    public Dictionary<string, string> EvidenceFor(IEnumerable<string> skills) => skills
+        .Where(skill => !string.IsNullOrWhiteSpace(EvidenceFor(skill)))
+        .ToDictionary(skill => skill, skill => EvidenceFor(skill)!.Trim(), StringComparer.Ordinal);
+
+    public void AcceptSavedMatches(IEnumerable<string> matchedSkills)
+    {
+        foreach (var skill in matchedSkills)
+        {
+            if (confirmed.Remove(skill))
+                saved.Add(skill);
+        }
     }
 
     public void Confirm()

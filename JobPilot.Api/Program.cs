@@ -47,6 +47,7 @@ internal static class Program
         if (app.Environment.IsDevelopment())
         {
             app.MapOpenApi();
+            app.MapAiDiagnostics();
         }
 
         app.MapJobPilotEndpoints();
