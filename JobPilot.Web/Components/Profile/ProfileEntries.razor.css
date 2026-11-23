@@ -1,0 +1,11 @@
+.profile-entry {
+    min-width: 0;
+    padding: .875rem;
+    border: 1px solid var(--border);
+    border-radius: .625rem;
+}
+
+.profile-entry legend {
+    padding-inline: .35rem;
+    font-weight: 650;
+}

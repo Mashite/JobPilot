@@ -1,0 +1,288 @@
+@page "/ai-assistant/resume"
+@rendermode InteractiveServer
+@implements IDisposable
+
+@using JobPilot.Web.Components.Resume
+@inject AgentResumeDraftState DraftState
+@inject ResumeWorkflow ResumeWorkflow
+@inject IHttpClientFactory HttpClientFactory
+
+<PageTitle>Resume Draft - JobPilot</PageTitle>
+
+<div class="page-stack">
+    <div><a href="ai-assistant"><span aria-hidden="true">←</span> AI Assistant</a></div>
+    <header>
+        <h2>AI-generated resume draft</h2>
+        @if (SelectedApplication is { } application)
+        {
+            <p class="text-muted break-word">Application: @application.JobTitle at @application.CompanyName</p>
+        }
+    </header>
+
+    @if (draft is not { } current)
+    {
+        <div class="alert alert-info">Open a generated resume from AI Assistant to start editing.</div>
+    }
+    else
+    {
+        @if (!string.IsNullOrWhiteSpace(current.JobDescription))
+        {
+            <details class="card card-body">
+                <summary>Source job description</summary>
+                <p class="draft-description">@current.JobDescription</p>
+            </details>
+        }
+
+        <fieldset disabled="@IsBusy">
+            <ResumeEditor Resume="current.Resume" ResumeChanged="ClearFeedback" @ref="resumeEditor" />
+        </fieldset>
+
+        <section class="card card-body page-stack" aria-labelledby="draft-actions-heading">
+            <div>
+                <h3 id="draft-actions-heading">Save or export</h3>
+                <p class="text-muted">Choose an application to save this draft. You can download it at any time.</p>
+            </div>
+
+            @if (isLoadingApplications)
+            {
+                <div class="actions" role="status"><span class="ui-spinner" aria-hidden="true"></span> Loading applications…</div>
+            }
+            else if (applicationLoadError is not null)
+            {
+                <div class="alert alert-danger" role="alert">@applicationLoadError</div>
+                <div><button type="button" class="btn btn-outline-primary" disabled="@IsBusy"
+                             @onclick="LoadApplicationsAsync">Retry loading applications</button></div>
+            }
+            else if (applications.Count == 0)
+            {
+                <p class="text-muted">No saved applications yet. Create an application to save this draft.</p>
+            }
+            else
+            {
+                <div>
+                    <label class="form-label" for="resume-application">Application</label>
+                    <select id="resume-application" class="form-select" disabled="@IsBusy"
+                            @bind="current.ApplicationId" @bind:after="ClearFeedback">
+                        <option value="">Choose an application</option>
+                        @foreach (var item in applications)
+                        {
+                            <option value="@item.Id">@item.JobTitle at @item.CompanyName (#@item.Id)</option>
+                        }
+                    </select>
+                </div>
+            }
+
+            @if (!isLoadingApplications && applicationLoadError is null && current.CreatedApplicationId is null)
+            {
+                <details>
+                    <summary>Create a new application</summary>
+                    <form class="page-stack actions-spaced" @onsubmit="CreateApplicationAsync" @onsubmit:preventDefault>
+                        <div>
+                            <label for="draft-job-title" class="form-label">Job Title</label>
+                            <input id="draft-job-title" class="form-control" maxlength="300" required
+                                   disabled="@IsBusy" @bind="jobTitle" @bind:event="oninput" />
+                        </div>
+                        <div>
+                            <label for="draft-company" class="form-label">Company Name</label>
+                            <input id="draft-company" class="form-control" maxlength="200" required
+                                   disabled="@IsBusy" @bind="companyName" @bind:event="oninput" />
+                        </div>
+                        <div>
+                            <label for="draft-job-description" class="form-label">Job Description</label>
+                            <textarea id="draft-job-description" class="form-control" rows="4" required
+                                      disabled="@IsBusy" @bind="jobDescription" @bind:event="oninput"></textarea>
+                        </div>
+                        <div>
+                            <button type="submit" class="btn btn-outline-primary" disabled="@IsBusy">Create Application</button>
+                        </div>
+                    </form>
+                </details>
+            }
+
+            <div class="actions">
+                <button type="button" class="btn btn-primary" disabled="@(IsBusy || SelectedApplication is null)"
+                        @onclick="SaveResumeAsync">Save Resume</button>
+                <button type="button" class="btn btn-outline-primary" disabled="@IsBusy"
+                        @onclick="DownloadResumeAsync">Download Word</button>
+                @if (savedApplicationId is int applicationId)
+                {
+                    <a href="@($"applications/{applicationId}")" class="btn btn-outline-primary">Open Saved Application</a>
+                }
+            </div>
+            <div class="actions" role="status">
+                @if (pendingOperation is not null)
+                {
+                    <span class="ui-spinner" aria-hidden="true"></span> @pendingOperation
+                }
+                @if (successMessage is not null)
+                {
+                    <span class="alert alert-success">@successMessage</span>
+                }
+            </div>
+            @if (errorMessage is not null)
+            {
+                <div class="alert alert-danger" role="alert">@errorMessage</div>
+            }
+        </section>
+    }
+</div>
+
+@code {
+    private readonly CancellationTokenSource pageLifetime = new();
+    private AgentResumeDraft? draft;
+    private ResumeEditor? resumeEditor;
+    private List<ApplicationOption> applications = [];
+    private bool isLoadingApplications;
+    private string? applicationLoadError;
+    private string? pendingOperation;
+    private string? errorMessage;
+    private string? successMessage;
+    private int? savedApplicationId;
+    private string jobTitle = "";
+    private string companyName = "";
+    private string jobDescription = "";
+
+    private bool IsBusy => pendingOperation is not null;
+    private ApplicationOption? SelectedApplication => applications.Find(application => application.Id == draft?.ApplicationId);
+
+    protected override async Task OnInitializedAsync()
+    {
+        draft = DraftState.Current;
+        if (draft is not null)
+        {
+            jobDescription = draft.JobDescription;
+            await LoadApplicationsAsync();
+        }
+    }
+
+    private async Task LoadApplicationsAsync()
+    {
+        if (isLoadingApplications || IsBusy)
+            return;
+
+        isLoadingApplications = true;
+        applicationLoadError = null;
+        var cancellationToken = pageLifetime.Token;
+        try
+        {
+            using var client = HttpClientFactory.CreateClient("JobPilotApi");
+            applications = await client.GetFromJsonAsync<List<ApplicationOption>>("api/applications", cancellationToken)
+                ?? throw new InvalidOperationException("The API did not return the list of applications.");
+        }
+        catch (Exception ex)
+        {
+            if (!cancellationToken.IsCancellationRequested)
+                applicationLoadError = $"Could not load applications. {ex.Message}";
+        }
+        finally
+        {
+            isLoadingApplications = false;
+        }
+    }
+
+    private Task CreateApplicationAsync()
+    {
+        if (IsBusy || isLoadingApplications || applicationLoadError is not null ||
+            draft is not { CreatedApplicationId: null } current)
+        {
+            return Task.CompletedTask;
+        }
+
+        if (string.IsNullOrWhiteSpace(jobTitle) || string.IsNullOrWhiteSpace(companyName) ||
+            string.IsNullOrWhiteSpace(jobDescription))
+        {
+            ClearFeedback();
+            errorMessage = "Enter a job title, company name, and job description.";
+            return Task.CompletedTask;
+        }
+
+        return ExecuteAsync("Creating application…", "Could not confirm application creation. Check Saved Jobs before trying again.",
+            async (client, cancellationToken) =>
+            {
+                using var response = await client.PostAsJsonAsync(
+                    "api/applications", new { jobTitle, companyName, jobDescription }, cancellationToken);
+                await response.EnsureJobPilotSuccessAsync(cancellationToken);
+                var application = await response.Content.ReadFromJsonAsync<ApplicationOption>(cancellationToken);
+                if (application is null || application.Id <= 0)
+                    throw new InvalidOperationException("The API did not return the new application.");
+
+                current.CreatedApplicationId = current.ApplicationId = application.Id;
+                applications.Insert(0, application);
+                successMessage = "Application created. Select Save Resume to attach this draft.";
+            });
+    }
+
+    private async Task SaveResumeAsync()
+    {
+        if (IsBusy || draft is not { } current || SelectedApplication is not { } application ||
+            !await ValidateResumeNameAsync(current))
+        {
+            return;
+        }
+
+        await ExecuteAsync("Saving resume…", "Could not save the resume.", async (client, cancellationToken) =>
+        {
+            await ResumeWorkflow.SaveAsync(client, application.Id, current.Resume, cancellationToken);
+            savedApplicationId = application.Id;
+            successMessage = $"Resume saved to {application.JobTitle} at {application.CompanyName}.";
+        });
+    }
+
+    private async Task DownloadResumeAsync()
+    {
+        if (IsBusy || draft is not { } current || !await ValidateResumeNameAsync(current))
+            return;
+
+        await ExecuteAsync("Preparing download…", "Could not export the resume.",
+            (client, cancellationToken) => ResumeWorkflow.DownloadAsync(client, current.Resume, cancellationToken));
+    }
+
+    private async ValueTask<bool> ValidateResumeNameAsync(AgentResumeDraft current)
+    {
+        if (!string.IsNullOrWhiteSpace(current.Resume.FullName))
+            return true;
+
+        if (resumeEditor is not null)
+            await resumeEditor.FocusFullNameAsync();
+
+        return false;
+    }
+
+    private async Task ExecuteAsync(string operation, string errorPrefix, Func<HttpClient, CancellationToken, Task> request)
+    {
+        if (IsBusy)
+            return;
+
+        var cancellationToken = pageLifetime.Token;
+        pendingOperation = operation;
+        ClearFeedback();
+        try
+        {
+            using var client = HttpClientFactory.CreateClient("JobPilotApi");
+            await request(client, cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            if (!cancellationToken.IsCancellationRequested)
+                errorMessage = $"{errorPrefix} {ex.Message}";
+        }
+        finally
+        {
+            pendingOperation = null;
+        }
+    }
+
+    private void ClearFeedback()
+    {
+        errorMessage = successMessage = null;
+        savedApplicationId = null;
+    }
+
+    public void Dispose()
+    {
+        pageLifetime.Cancel();
+        pageLifetime.Dispose();
+    }
+
+    private sealed record ApplicationOption(int Id, string JobTitle, string CompanyName);
+}

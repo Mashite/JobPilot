@@ -12,4 +12,5 @@ public class JobMatchResult
     public List<string> MissingOrUnverifiedSkills { get; set; } = [];
 
     public List<string> Evidence { get; set; } = [];
+    public List<JobRequirement> Requirements { get; set; } = [];
 }

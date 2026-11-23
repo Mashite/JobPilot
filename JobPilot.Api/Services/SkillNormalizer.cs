@@ -39,10 +39,7 @@ public class SkillNormalizer
         if (string.IsNullOrWhiteSpace(skill))
             return string.Empty;
 
-        var value = Regex.Replace(
-            skill.Trim().ToLowerInvariant(),
-            @"\s+",
-            " ");
+        var value = CleanDisplayName(skill).ToLowerInvariant();
 
         // Normalize .NET versions into a general .NET skill
         if (Regex.IsMatch(
@@ -56,5 +53,5 @@ public class SkillNormalizer
             ? canonical
             : value;
     }
-
+    public string CleanDisplayName(string skill) => Regex.Replace(skill.Trim(), @"\s+", " ");
 }

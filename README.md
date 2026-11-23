@@ -40,6 +40,18 @@ JobPilot is also a hands-on exploration of modern AI application development, in
 - Grounding generated content in verified candidate data
 - Local AI deployment and integration with .NET applications
 
+## Master Profile Updates
+
+Open **Master CV** from the sidebar to maintain verified profile information. Job Analyzer can also add explicitly confirmed skills. Both workflows use the API's local `Data/candidate-profile.json`. For a read-only deployment directory, copy the profile to a private, writable location outside the repository and configure the API with the `CandidateProfile__Path` environment variable.
+
+Existing profiles load directly. Master CV shows legacy education and project text as editable entries. When you explicitly save, structured details are written alongside the existing text fields for compatibility. The API uses the latest file for matching and resume generation. No SQL migration or import is needed.
+
+`GET /api/profile` returns an ETag. A full update via `PUT /api/profile` requires that value in `If-Match`. If Skill Review or another editor saves first, the stale update receives HTTP 412. Copy any unsaved edits you want to keep, then reload the latest profile. The resume format uses verified skills, role details, education, and projects. Contact information and certifications stay in Master CV.
+
+The profile update endpoint is intended for the existing single-user, loopback deployment. Keep both applications bound to localhost for this workflow. A shared deployment needs user authentication and per-user authorization before exposing profile updates.
+
+If your local API runs on a different port, set `JobPilotApi__BaseAddress` in the Web app environment to that loopback URL.
+
 ## Project Status
 
 **Active Development**

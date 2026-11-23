@@ -1,0 +1,27 @@
+.profile-fields {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 17rem), 1fr));
+    gap: .875rem;
+    min-width: 0;
+}
+
+.profile-lines {
+    display: grid;
+    gap: .85rem;
+    margin-block: .875rem;
+}
+
+.profile-checkbox {
+    display: flex;
+    align-items: center;
+    gap: .5rem;
+    margin-block-start: .875rem;
+}
+
+.profile-actions {
+    position: sticky;
+    inset-block-end: .5rem;
+    display: grid;
+    gap: .75rem;
+    z-index: 1;
+}

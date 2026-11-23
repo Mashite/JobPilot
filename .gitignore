@@ -13,6 +13,7 @@ secrets.json
 *.pubxml.user
 *.publishsettings
 /JobPilot.Api/Data/candidate-profile.json
+/JobPilot.Api/Data/candidate-profile.json.*
 JobPilotResume*.docx
 
 # .NET build output and Visual Studio state

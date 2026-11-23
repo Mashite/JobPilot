@@ -16,6 +16,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\JobPilot.Api\JobPilot.Api.csproj" />
+    <ProjectReference Include="..\JobPilot.Web\JobPilot.Web.csproj" />
   </ItemGroup>
 
   <ItemGroup>

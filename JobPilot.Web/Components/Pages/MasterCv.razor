@@ -1,0 +1,271 @@
+@page "/master-cv"
+@rendermode InteractiveServer
+@implements IDisposable
+
+@using System.Net
+@using JobPilot.Web.Components.Profile
+@using JobPilot.Web.Models
+@inject IHttpClientFactory HttpClientFactory
+@inject IJSRuntime JS
+
+<PageTitle>Master CV - JobPilot</PageTitle>
+<NavigationLock ConfirmExternalNavigation="@hasChanges" OnBeforeInternalNavigation="ConfirmNavigationAsync" />
+
+<div class="page-intro">
+    <h2>Master CV</h2>
+    <p>Maintain the verified information JobPilot uses to match jobs and generate tailored resumes.</p>
+</div>
+
+@if (profile is not { } draft)
+{
+    <div class="card card-body">
+        @if (isLoading)
+        {
+            <div class="actions" role="status"><span class="ui-spinner" aria-hidden="true"></span> Loading master profile…</div>
+        }
+        else
+        {
+            <div class="alert alert-danger" role="alert">@errorMessage</div>
+            <div class="actions actions-spaced"><button type="button" class="btn btn-outline-primary" @onclick="LoadAsync">Retry</button></div>
+        }
+    </div>
+}
+else
+{
+    <form class="page-stack" @key="draft" @oninput="MarkChanged" @onchange="MarkChanged"
+          @onsubmit="SaveAsync" @onsubmit:preventDefault>
+        <fieldset class="page-stack" disabled="@(isSaving || isLoading)">
+            <section class="card card-body page-stack" aria-labelledby="master-personal-heading">
+                <h3 id="master-personal-heading">Personal information</h3>
+                <div class="profile-fields">
+                    <ProfileField Label="Full name" Autocomplete="name" Required @bind-Value="draft.FullName" />
+                    <ProfileField Label="Professional title" Autocomplete="organization-title" Required @bind-Value="draft.ProfessionalTitle" />
+                    <ProfileField Label="Email" Type="email" MaxLength="254" Autocomplete="email" @bind-Value="draft.Email" />
+                    <ProfileField Label="Phone" Type="tel" MaxLength="60" Autocomplete="tel" @bind-Value="draft.Phone" />
+                    <ProfileField Label="Location" Autocomplete="address-level2" @bind-Value="draft.Location" />
+                    <ProfileField Label="LinkedIn URL" Type="url" MaxLength="2000" @bind-Value="draft.LinkedIn" />
+                    <ProfileField Label="GitHub URL" Type="url" MaxLength="2000" @bind-Value="draft.GitHub" />
+                </div>
+            </section>
+
+            <section class="card card-body" aria-label="Professional summary">
+                <ProfileField Label="Professional summary" Rows="5" MaxLength="8000" @bind-Value="draft.Summary" />
+            </section>
+
+            <ProfileEntries Items="draft.Experiences" Heading="Work experience" EntryName="Position"
+                            EmptyText="No positions added." Reorder Changed="MarkChanged" Context="position">
+                <div class="profile-fields">
+                    <ProfileField Label="Company" Required @bind-Value="position.Company" />
+                    <ProfileField Label="Job title" Required @bind-Value="position.Position" />
+                    <ProfileField Label="Start date" MaxLength="60" Required @bind-Value="position.StartDate" />
+                    @if (!position.IsCurrentPosition)
+                    {
+                        <ProfileField Label="End date" MaxLength="60" Required @bind-Value="position.EndDate" />
+                    }
+                </div>
+                <label class="profile-checkbox">
+                    <input type="checkbox" @bind="position.IsCurrentPosition"
+                           @bind:after="() => UpdateCurrentPosition(position)" /> I currently work here
+                </label>
+                <div class="profile-lines">
+                    <ProfileLines Label="Responsibilities" @bind-Values="position.Responsibilities" />
+                    <ProfileLines Label="Achievements" @bind-Values="position.Achievements" />
+                    <ProfileLines Label="Technologies" @bind-Values="position.Technologies" />
+                </div>
+            </ProfileEntries>
+
+            <section class="card card-body page-stack" aria-labelledby="master-skills-heading">
+                <div>
+                    <h3 id="master-skills-heading">Technical skills</h3>
+                    <p class="text-muted">List skills you possess. Saving removes duplicates, including known aliases.</p>
+                </div>
+                <ProfileLines Label="Verified skills" Rows="7" @bind-Values="draft.TechnicalSkills" />
+            </section>
+
+            <ProfileEntries Items="draft.EducationDetails!" Heading="Education" EntryName="Education entry"
+                            EmptyText="No education entries added." Changed="MarkChanged" Context="education">
+                <div class="profile-fields">
+                    <ProfileField Label="Degree or credential" Required MaxLength="1000" @bind-Value="education.Degree" />
+                    <ProfileField Label="Institution" @bind-Value="education.Institution" />
+                    <ProfileField Label="Graduation date" MaxLength="60" @bind-Value="education.GraduationDate" />
+                </div>
+                <div class="profile-lines">
+                    <ProfileField Label="Details" Rows="3" MaxLength="4000" @bind-Value="education.Details" />
+                </div>
+            </ProfileEntries>
+
+            <ProfileEntries Items="draft.Certifications" Heading="Certifications" EntryName="Certification"
+                            EmptyText="No certifications added." Changed="MarkChanged" Context="certification">
+                <div class="profile-fields">
+                    <ProfileField Label="Certification name" Required @bind-Value="certification.Name" />
+                    <ProfileField Label="Issuer" @bind-Value="certification.Issuer" />
+                    <ProfileField Label="Date earned" MaxLength="60" @bind-Value="certification.Date" />
+                    <ProfileField Label="Certification URL" Type="url" MaxLength="2000" @bind-Value="certification.Url" />
+                </div>
+            </ProfileEntries>
+
+            <ProfileEntries Items="draft.ProjectDetails!" Heading="Projects" EntryName="Project"
+                            EmptyText="No projects added." Changed="MarkChanged" Context="project">
+                <div class="profile-fields">
+                    <ProfileField Label="Project name" Required MaxLength="1000" @bind-Value="project.Name" />
+                    <ProfileField Label="Project URL" Type="url" MaxLength="2000" @bind-Value="project.Url" />
+                </div>
+                <div class="profile-lines">
+                    <ProfileField Label="Description" Rows="3" MaxLength="4000" @bind-Value="project.Description" />
+                    <ProfileLines Label="Technologies" @bind-Values="project.Technologies" />
+                    <ProfileLines Label="Achievements" @bind-Values="project.Achievements" />
+                </div>
+            </ProfileEntries>
+        </fieldset>
+
+        <section class="card card-body profile-actions" aria-label="Master CV actions">
+            @if (errorMessage is not null)
+            {
+                <div class="alert alert-danger" role="alert">@errorMessage</div>
+            }
+            <div class="actions">
+                <button type="submit" class="btn btn-primary" disabled="@(!hasChanges || isSaving || isLoading || hasConflict)">Save Changes</button>
+                <button type="button" class="btn btn-outline-primary" disabled="@(!hasChanges || isSaving || isLoading)"
+                        @onclick="CancelAsync">@(hasConflict ? "Reload latest profile" : "Cancel")</button>
+                <span class="text-muted" role="status">
+                    @if (isSaving || isLoading)
+                    {
+                        <span class="ui-spinner" aria-hidden="true"></span>
+                    }
+                    @Status
+                </span>
+            </div>
+        </section>
+    </form>
+}
+
+@code {
+    private readonly CancellationTokenSource pageLifetime = new();
+    private CandidateProfileForm? profile;
+    private string version = "";
+    private bool isLoading;
+    private bool isSaving;
+    private bool hasChanges;
+    private bool hasConflict;
+    private string? errorMessage;
+    private string? successMessage;
+
+    private string? Status => isSaving ? "Saving changes…" : isLoading ? "Loading profile…" :
+        hasChanges ? "Unsaved changes" : successMessage;
+
+    protected override Task OnInitializedAsync() => LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        if (isLoading || isSaving)
+            return;
+
+        isLoading = true;
+        errorMessage = null;
+        var cancellationToken = pageLifetime.Token;
+        try
+        {
+            using var client = HttpClientFactory.CreateClient("JobPilotApi");
+            using var response = await client.GetAsync("api/profile", cancellationToken);
+            await SetProfileAsync(response, cancellationToken);
+            successMessage = null;
+        }
+        catch (Exception) when (!cancellationToken.IsCancellationRequested)
+        {
+            errorMessage = "Could not load the master profile. Check that the API is running and the profile file is readable.";
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+        }
+        finally
+        {
+            isLoading = false;
+        }
+    }
+
+    private async Task SaveAsync()
+    {
+        if (profile is not { } draft || !hasChanges || isLoading || isSaving || hasConflict)
+            return;
+
+        isSaving = true;
+        errorMessage = null;
+        var cancellationToken = pageLifetime.Token;
+        try
+        {
+            using var client = HttpClientFactory.CreateClient("JobPilotApi");
+            using var request = new HttpRequestMessage(HttpMethod.Put, "api/profile") { Content = JsonContent.Create(draft) };
+            request.Headers.IfMatch.ParseAdd(version);
+            request.Headers.Add("X-JobPilot-Profile-Write", "1");
+            using var response = await client.SendAsync(request, cancellationToken);
+            if (response.StatusCode == HttpStatusCode.PreconditionFailed)
+            {
+                hasConflict = true;
+                errorMessage = "The master profile changed after you opened it. Review or copy your edits before reloading the latest profile.";
+                return;
+            }
+
+            await SetProfileAsync(response, cancellationToken);
+            successMessage = "Master CV saved.";
+        }
+        catch (HttpRequestException ex) when (ex.StatusCode == HttpStatusCode.BadRequest)
+        {
+            errorMessage = ex.Message;
+        }
+        catch (Exception) when (!cancellationToken.IsCancellationRequested)
+        {
+            errorMessage = "Could not save the master profile. Check that the API is running and the profile file is writable, then try again.";
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+        }
+        finally
+        {
+            isSaving = false;
+        }
+    }
+
+    private async Task SetProfileAsync(HttpResponseMessage response, CancellationToken cancellationToken)
+    {
+        await response.EnsureJobPilotSuccessAsync(cancellationToken);
+        var updated = await response.Content.ReadFromJsonAsync<CandidateProfileForm>(cancellationToken);
+        var updatedVersion = response.Headers.ETag?.ToString();
+        if (updated is null || string.IsNullOrEmpty(updatedVersion))
+            throw new InvalidOperationException("The API did not return a versioned profile.");
+
+        updated.PrepareForEditing();
+        profile = updated;
+        version = updatedVersion;
+        hasChanges = hasConflict = false;
+    }
+
+    private void MarkChanged()
+    {
+        hasChanges = true;
+        successMessage = null;
+    }
+
+    private static void UpdateCurrentPosition(WorkExperienceForm position)
+    {
+        if (!position.IsCurrentPosition && string.Equals(position.EndDate?.Trim(), "Present", StringComparison.OrdinalIgnoreCase))
+            position.EndDate = null;
+    }
+
+    private async Task CancelAsync()
+    {
+        if (hasChanges && await JS.InvokeAsync<bool>("confirm", "Discard your unsaved changes and reload the master profile?"))
+            await LoadAsync();
+    }
+
+    private async Task ConfirmNavigationAsync(LocationChangingContext context)
+    {
+        if (hasChanges && !await JS.InvokeAsync<bool>("confirm", "Leave Master CV with unsaved changes?"))
+            context.PreventNavigation();
+    }
+
+    public void Dispose()
+    {
+        pageLifetime.Cancel();
+        pageLifetime.Dispose();
+    }
+}

@@ -4,15 +4,22 @@
 
 @using System.Net
 @using System.Text.Json
+@using JobPilot.Web.Models
 @using JobPilot.Web.Models.Agent
 @inject IHttpClientFactory HttpClientFactory
 @inject IJSRuntime JS
+@inject AgentResumeDraftState ResumeDraftState
+@inject NavigationManager Navigation
 
 <PageTitle>JobPilot AI Assistant</PageTitle>
 
 <div class="page-intro">
     <h2>JobPilot AI Assistant</h2>
     <p>Ask about a job, compare it with your profile, or draft a tailored resume.</p>
+    @if (ResumeDraftState.Current is not null)
+    {
+        <a href="ai-assistant/resume">Return to resume draft</a>
+    }
 </div>
 
 <section class="card chat-panel" aria-labelledby="chat-heading">
@@ -58,6 +65,20 @@
                                 <summary><code>@tool.ToolName</code></summary>
                                 <pre><code>@JsonSerializer.Serialize(tool.Result, IndentedJson)</code></pre>
                             </details>
+                            @if (resumeResults.TryGetValue(tool, out var entry))
+                            {
+                                @if (entry.Result.Resume is { } resume)
+                                {
+                                    <div class="actions">
+                                        <button type="button" class="btn btn-primary" disabled="@isSending"
+                                                @onclick="() => OpenResume(resume, entry.JobDescription)">Edit Resume</button>
+                                    </div>
+                                }
+                                else
+                                {
+                                    <div class="alert alert-danger" role="alert">@entry.Result.Error</div>
+                                }
+                            }
                         }
                     </div>
                 }
@@ -107,6 +128,8 @@
 
     private static readonly JsonSerializerOptions IndentedJson = new() { WriteIndented = true };
     private readonly List<ChatMessage> messages = [];
+    private readonly Dictionary<AgentToolResult, (AgentResumeResult Result, string? JobDescription)> resumeResults =
+        new(ReferenceEqualityComparer.Instance);
     private readonly CancellationTokenSource pageLifetime = new();
     private ElementReference conversation;
     private ElementReference messageInput;
@@ -162,6 +185,9 @@
                 throw new JsonException();
             }
 
+            foreach (var tool in result.ExecutedTools.Where(tool => tool.ToolName == AgentResumeResult.ToolName))
+                resumeResults.Add(tool, (AgentResumeResult.Parse(tool.Result), description));
+
             messages.Add(new ChatMessage("assistant", result.Message, result.ExecutedTools));
             scrollPending = true;
         }
@@ -197,9 +223,19 @@
             return;
 
         messages.Clear();
+        resumeResults.Clear();
         jobDescription = "";
         userMessage = "";
         errorMessage = null;
+    }
+
+    private void OpenResume(GeneratedResume resume, string? description)
+    {
+        if (isSending)
+            return;
+
+        ResumeDraftState.Open(resume, description);
+        Navigation.NavigateTo("ai-assistant/resume");
     }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)

@@ -6,7 +6,7 @@
 @using JobPilot.Web.Models
 @using JobPilot.Web.Components.Resume
 @inject IHttpClientFactory HttpClientFactory
-@inject IJSRuntime JS
+@inject ResumeWorkflow ResumeWorkflow
 
 <PageTitle>Application Workspace - JobPilot</PageTitle>
 
@@ -328,10 +328,7 @@
         var applicationId = Id;
         await ExecuteAsync(Operation.SaveResume, async (client, cancellationToken) =>
         {
-            using var response = await client.PostAsJsonAsync(
-                $"api/applications/{applicationId}/resumes", draft, cancellationToken);
-
-            await response.EnsureJobPilotSuccessAsync(cancellationToken);
+            await ResumeWorkflow.SaveAsync(client, applicationId, draft, cancellationToken);
             cancellationToken.ThrowIfCancellationRequested();
             successMessage = "Resume saved successfully.";
         });
@@ -358,19 +355,8 @@
         if (IsBusy || resume is not { } draft || !await ValidateResumeNameAsync(draft))
             return;
 
-        await ExecuteAsync(Operation.DownloadResume, async (client, cancellationToken) =>
-        {
-            using var response = await client.PostAsJsonAsync("api/resumes/export-docx", draft, cancellationToken);
-            await response.EnsureJobPilotSuccessAsync(cancellationToken);
-
-            var bytes = await response.Content.ReadAsByteArrayAsync(cancellationToken);
-            await JS.InvokeVoidAsync(
-                "jobPilot.downloadFile",
-                cancellationToken,
-                "JobPilotResume.docx",
-                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                Convert.ToBase64String(bytes));
-        });
+        await ExecuteAsync(Operation.DownloadResume, (client, cancellationToken) =>
+            ResumeWorkflow.DownloadAsync(client, draft, cancellationToken));
     }
 
     private void HandleResumeChanged()

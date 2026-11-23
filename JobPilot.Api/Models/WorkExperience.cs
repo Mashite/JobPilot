@@ -1,7 +1,7 @@
 ﻿
 namespace JobPilot.Api.Models;
 
-public class WorkExperience
+public class WorkExperience : ProfileEntry
 {
     public string Company { get; set; } = "";
     public string Position { get; set; } = "";
@@ -9,5 +9,6 @@ public class WorkExperience
     public string? EndDate { get; set; }
     public bool IsCurrentPosition { get; set; }
     public List<string> Responsibilities { get; set; } = [];
+    public List<string> Achievements { get; set; } = [];
+    public List<string> Technologies { get; set; } = [];
 }
-    

@@ -8,12 +8,14 @@ public class JobMatchingService(
 {
     public JobMatchResult Match(
         JobAnalysis job,
-        CandidateProfile profile)
+        CandidateProfile profile,
+        IEnumerable<string>? confirmedSkills = null)
     {
         // Only explicitly verified skills count.
-        var candidateSkills = profile.TechnicalSkills
+        var candidateSkills = (profile.TechnicalSkills ?? [])
             .Select(normalizer.Normalize)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var reviewSkills = confirmedSkills?.Select(normalizer.Normalize).ToHashSet(StringComparer.OrdinalIgnoreCase);
 
         // Deduplicate aliases from the job requirements.
         // If the same skill appears twice, required wins.
@@ -43,13 +45,15 @@ public class JobMatchingService(
 
             totalWeight += weight;
 
-            if (candidateSkills.Contains(skill))
+            var inProfile = candidateSkills.Contains(skill);
+            if (inProfile || reviewSkills?.Contains(skill) == true)
             {
                 matchedWeight += weight;
                 matched.Add(requirement.Skill);
 
-                evidence.Add(
-                    $"{requirement.Skill}: verified in candidate skills");
+                evidence.Add(inProfile
+                    ? $"{requirement.Skill}: verified in candidate skills"
+                    : $"{requirement.Skill}: confirmed in this review, pending profile save");
             }
             else
             {
@@ -69,7 +73,8 @@ public class JobMatchingService(
             MatchScore = score,
             MatchingSkills = matched,
             MissingOrUnverifiedSkills = unverified,
-            Evidence = evidence
+            Evidence = evidence,
+            Requirements = requirements
         };
     }
 }

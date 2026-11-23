@@ -11,7 +11,6 @@ internal static class JobPilotEndpoints
     public static void MapJobPilotEndpoints(this IEndpointRouteBuilder endpoints)
     {
         endpoints.MapPost("/api/jobs/analyze", AnalyzeJob);
-        endpoints.MapGet("/api/profile", GetProfile);
         endpoints.MapPost("/api/jobs/match", MatchJob);
         endpoints.MapPost("/api/resumes/generate", GenerateResume);
         endpoints.MapPost("/api/resumes/generate-docx", GenerateResumeDocx);
@@ -29,14 +28,6 @@ internal static class JobPilotEndpoints
 
         var result = await ollama.AnalyzeJobAsync(request.JobDescription, cancellationToken);
         return Results.Ok(new { analysis = result });
-    }
-
-    private static async Task<IResult> GetProfile(
-        CandidateProfileService profileService,
-        CancellationToken cancellationToken)
-    {
-        var profile = await profileService.GetProfileAsync(cancellationToken);
-        return Results.Ok(profile);
     }
 
     private static async Task<IResult> MatchJob(

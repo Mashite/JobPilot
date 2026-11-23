@@ -1,0 +1,78 @@
+@typeparam TEntry where TEntry : class, new()
+
+<section class="card card-body page-stack" aria-labelledby="@headingId">
+    <div class="actions">
+        <h3 id="@headingId">@Heading</h3>
+        <button type="button" class="btn btn-outline-primary" @onclick="AddAsync">Add @EntryName</button>
+    </div>
+    @if (Items.Count == 0)
+    {
+        <p class="text-muted">@EmptyText</p>
+    }
+    @for (var index = 0; index < Items.Count; index++)
+    {
+        var entry = Items[index];
+        var position = index;
+        <fieldset class="profile-entry" @key="entry">
+            <legend>@($"{EntryName} {position + 1}")</legend>
+            @ChildContent(entry)
+            <div class="actions actions-spaced">
+                @if (Reorder)
+                {
+                    <button type="button" class="btn btn-outline-primary" disabled="@(position == 0)"
+                            aria-label="@($"Move {EntryName} {position + 1} up")" @onclick="() => MoveAsync(position, -1)">Move up</button>
+                    <button type="button" class="btn btn-outline-primary" disabled="@(position == Items.Count - 1)"
+                            aria-label="@($"Move {EntryName} {position + 1} down")" @onclick="() => MoveAsync(position, 1)">Move down</button>
+                }
+                <button type="button" class="btn btn-outline-primary" aria-label="@($"Remove {EntryName} {position + 1}")"
+                        @onclick="() => pendingRemoval = entry">Remove</button>
+            </div>
+            @if (ReferenceEquals(pendingRemoval, entry))
+            {
+                <div class="alert alert-warning actions-spaced" role="group" aria-label="Confirm removal">
+                    <p>Remove this @EntryName.ToLowerInvariant() from the draft?</p>
+                    <div class="actions">
+                        <button type="button" class="btn btn-primary" @onclick="() => RemoveAsync(entry)">Remove entry</button>
+                        <button type="button" class="btn btn-outline-primary" @onclick="() => pendingRemoval = null">Keep entry</button>
+                    </div>
+                </div>
+            }
+        </fieldset>
+    }
+</section>
+
+@code {
+    [Parameter, EditorRequired] public string Heading { get; set; } = "";
+    [Parameter, EditorRequired] public string EntryName { get; set; } = "";
+    [Parameter, EditorRequired] public string EmptyText { get; set; } = "";
+    [Parameter, EditorRequired] public List<TEntry> Items { get; set; } = [];
+    [Parameter, EditorRequired] public RenderFragment<TEntry> ChildContent { get; set; } = default!;
+    [Parameter] public EventCallback Changed { get; set; }
+    [Parameter] public bool Reorder { get; set; }
+
+    private readonly string headingId = $"profile-entries-{Guid.NewGuid():N}";
+    private TEntry? pendingRemoval;
+
+    private Task AddAsync()
+    {
+        Items.Add(new TEntry());
+        return Changed.InvokeAsync();
+    }
+
+    private Task RemoveAsync(TEntry entry)
+    {
+        pendingRemoval = null;
+        Items.Remove(entry);
+        return Changed.InvokeAsync();
+    }
+
+    private Task MoveAsync(int position, int offset)
+    {
+        var target = position + offset;
+        if (position < 0 || position >= Items.Count || target < 0 || target >= Items.Count)
+            return Task.CompletedTask;
+
+        (Items[position], Items[target]) = (Items[target], Items[position]);
+        return Changed.InvokeAsync();
+    }
+}

@@ -17,7 +17,7 @@ internal static class Program
                 builder.Configuration.GetConnectionString(
                     "JobPilotDatabase")));
 
-        builder.Services.AddScoped<CandidateProfileService>();
+        builder.Services.AddSingleton<CandidateProfileService>();
         builder.Services.AddSingleton<SkillNormalizer>();
         builder.Services.AddScoped<JobMatchingService>();
         builder.Services.AddScoped<CandidateProfileValidator>();
@@ -68,6 +68,8 @@ internal static class Program
         }
 
         app.MapJobPilotEndpoints();
+        app.MapProfileEndpoints();
+        app.MapSkillReviewEndpoints();
         app.MapJobApplicationEndpoints();
 
         app.UseHttpsRedirection();

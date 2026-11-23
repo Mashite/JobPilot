@@ -1,0 +1,26 @@
+<div>
+    <label class="form-label" for="@fieldId">@Label</label>
+    @if (Rows is int rows)
+    {
+        <textarea id="@fieldId" class="form-control" rows="@rows" maxlength="@MaxLength"
+                  required="@Required" @bind:get="Value" @bind:set="ValueChanged.InvokeAsync" @bind:event="oninput"></textarea>
+    }
+    else
+    {
+        <input id="@fieldId" class="form-control" type="@Type" maxlength="@MaxLength" autocomplete="@Autocomplete"
+               required="@Required" @bind:get="Value" @bind:set="ValueChanged.InvokeAsync" @bind:event="oninput" />
+    }
+</div>
+
+@code {
+    [Parameter, EditorRequired] public string Label { get; set; } = "";
+    [Parameter] public string? Value { get; set; }
+    [Parameter] public EventCallback<string?> ValueChanged { get; set; }
+    [Parameter] public int? Rows { get; set; }
+    [Parameter] public int MaxLength { get; set; } = 250;
+    [Parameter] public bool Required { get; set; }
+    [Parameter] public string Type { get; set; } = "text";
+    [Parameter] public string? Autocomplete { get; set; }
+
+    private readonly string fieldId = $"profile-field-{Guid.NewGuid():N}";
+}

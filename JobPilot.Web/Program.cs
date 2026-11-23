@@ -1,15 +1,18 @@
 using JobPilot.Web.Components;
+using JobPilot.Web.Services;
 
 var builder = WebApplication.CreateBuilder(args);
 
 // Add services to the container.
 builder.Services.AddRazorComponents()
     .AddInteractiveServerComponents();
+builder.Services.AddScoped<AgentResumeDraftState>();
+builder.Services.AddScoped<ResumeWorkflow>();
 
 builder.Services.AddHttpClient("JobPilotApi", client =>
 {
     client.BaseAddress =
-        new Uri("http://localhost:5287/");
+        new Uri(builder.Configuration["JobPilotApi:BaseAddress"] ?? "http://localhost:5287/", UriKind.Absolute);
 
     client.Timeout = TimeSpan.FromMinutes(5);
 });

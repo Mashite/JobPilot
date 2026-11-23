@@ -1,0 +1,5 @@
+.draft-description {
+    margin-block-start: .75rem;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}
