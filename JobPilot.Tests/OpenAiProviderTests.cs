@@ -32,6 +32,11 @@ public sealed class OpenAiProviderTests
     [InlineData("AI:OpenAI:Model", "not a model")]
     [InlineData("AI:OpenAI:MaxOutputTokens", "0")]
     [InlineData("AI:OpenAI:RequestTimeoutSeconds", "121")]
+    [InlineData("AI:OpenAI:TokenLimits:JobAnalysis", "128001")]
+    [InlineData("AI:OpenAI:ReasoningEffort:SemanticMatching", "minimal")]
+    [InlineData("AI:SemanticMatching:BatchSize", "0")]
+    [InlineData("AI:SemanticMatching:MaxOutputTokens", "128001")]
+    [InlineData("AI:SemanticMatching:MaxRetryAttempts", "2")]
     public void InvalidOpenAiSettingsAreRejectedBeforeAnyRequest(string key, string value)
     {
         var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
@@ -67,6 +72,69 @@ public sealed class OpenAiProviderTests
         Assert.DoesNotContain("private prompt", log);
         Assert.DoesNotContain("Hello JobPilot", log);
         Assert.DoesNotContain("test-key", log);
+    }
+
+    [Fact]
+    public async Task RetriedTokenLimitedResponseLogsAndCountsBothAttempts()
+    {
+        var handler = new MockHttp(Incomplete("max_output_tokens"), Reply("Recovered"));
+        var logger = new CaptureLog();
+        var usage = new OpenAiUsage(new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["AI:OpenAI:InputUsdPerMillionTokens"] = "1",
+            ["AI:OpenAI:OutputUsdPerMillionTokens"] = "2"
+        }).Build());
+        var settings = new OpenAiProviderSettings("gpt-6-luna", 1024, TimeSpan.FromSeconds(10),
+            new Dictionary<AiOperation, int> { [AiOperation.ResumeGeneration] = 256 }, RetryLimit: 400);
+        using var provider = new OpenAiModelProvider(new HttpClient(handler), "test-key", settings, logger, usage);
+        var result = await provider.GenerateAsync(Hello() with { Operation = AiOperation.ResumeGeneration });
+        Assert.Equal("Recovered", result.Text);
+        Assert.Equal([256, 400], handler.Requests.Select(item => item.Body.GetProperty("max_output_tokens").GetInt32()));
+        Assert.Contains("resp_incomplete", logger.Messages[0]);
+        Assert.Contains("incomplete reason max_output_tokens", logger.Messages[0]);
+        Assert.Contains("reasoning tokens 21 stage ResumeGeneration tool generate_resume", logger.Messages[0]);
+        Assert.DoesNotContain("private unfinished text", logger.Messages[0]);
+        var metrics = JsonSerializer.SerializeToElement(usage.Snapshot());
+        Assert.Equal(2, metrics.GetProperty("requests").GetInt32());
+        Assert.Equal(1, metrics.GetProperty("tokenRetryRequests").GetInt32());
+        Assert.Equal(21, metrics.GetProperty("reasoningTokens").GetInt32());
+        Assert.True(metrics.GetProperty("estimatedUsd").GetDecimal() > 0);
+    }
+
+    [Theory]
+    [InlineData("max_output_tokens", 2)]
+    [InlineData("content_filter", 1)]
+    [InlineData("max_messages", 1)]
+    public async Task IncompleteOutputNeverParsesAndOnlyTokenLimitsRetryOnce(string reason, int attempts)
+    {
+        var handler = new MockHttp(Incomplete(reason), Incomplete(reason));
+        using var provider = new OpenAiModelProvider(new HttpClient(handler), "test-key",
+            new OpenAiProviderSettings("gpt-6-luna", 4096, TimeSpan.FromSeconds(10), RetryLimit: 16384),
+            NullLogger<OpenAiModelProvider>.Instance);
+        var failure = await Assert.ThrowsAsync<AiProviderException>(() => provider.GenerateAsync(Hello()));
+        Assert.Equal(reason, failure.DiagnosticCode);
+        Assert.Equal(attempts, handler.Requests.Count);
+    }
+
+    [Fact]
+    public async Task SemanticBatchOwnsRetriesAndProviderLogsItsMetadata()
+    {
+        var handler = new MockHttp(Incomplete("max_output_tokens"));
+        var logger = new CaptureLog();
+        using var provider = new OpenAiModelProvider(new HttpClient(handler), "test-key",
+            new OpenAiProviderSettings("gpt-6-luna", 16384, TimeSpan.FromSeconds(10), RetryLimit: 16384,
+                ReasoningEfforts: new Dictionary<AiOperation, string> { [AiOperation.SemanticMatching] = "low" }), logger);
+        var request = Hello() with
+        {
+            Operation = AiOperation.SemanticMatching, MaxOutputTokens = 8192,
+            SemanticBatch = new SemanticRequestInfo(2, 3, 4, 9, 0, 240)
+        };
+        var error = await Assert.ThrowsAsync<AiProviderException>(() => provider.GenerateAsync(request));
+        Assert.Equal("max_output_tokens", error.DiagnosticCode);
+        Assert.Equal(8192, Assert.Single(handler.Requests).Body.GetProperty("max_output_tokens").GetInt32());
+        var log = Assert.Single(logger.Messages);
+        Assert.Contains("reasoning effort low semantic batch 2/3 requirements 4 evidence records 9 batch retry 0 prompt characters 240", log);
+        Assert.DoesNotContain("private unfinished text", log);
     }
 
     [Fact]
@@ -244,6 +312,14 @@ public sealed class OpenAiProviderTests
 
     private static HttpResponseMessage Error(int status, string code, string message) =>
         JsonResponse(JsonSerializer.Serialize(new { error = new { code, message } }), status);
+
+    private static HttpResponseMessage Incomplete(string reason) => JsonResponse(JsonSerializer.Serialize(new
+    {
+        id = "resp_incomplete", model = "gpt-6-luna", status = "incomplete", max_output_tokens = 256,
+        incomplete_details = new { reason },
+        output = new[] { new { type = "message", content = new[] { new { type = "output_text", text = "private unfinished text" } } } },
+        usage = new { input_tokens = 11, output_tokens = 256, total_tokens = 267, output_tokens_details = new { reasoning_tokens = 21 } }
+    }));
 
     private static HttpResponseMessage JsonResponse(string body, int status = 200) =>
         new((HttpStatusCode)status) { Content = new StringContent(body, Encoding.UTF8, "application/json") };

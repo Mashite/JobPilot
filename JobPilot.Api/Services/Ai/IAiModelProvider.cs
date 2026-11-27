@@ -13,7 +13,13 @@ public sealed record AiRequest(
     JsonElement? OutputSchema = null,
     IReadOnlyList<AiTool>? Tools = null,
     double? Temperature = null,
-    int? MaxOutputTokens = null);
+    int? MaxOutputTokens = null,
+    AiOperation Operation = AiOperation.Default,
+    SemanticRequestInfo? SemanticBatch = null);
+
+public sealed record SemanticRequestInfo(int Number, int Total, int RequirementCount, int EvidenceCount, int Retry, int PromptCharacters);
+
+public enum AiOperation { Default, Agent, JobAnalysis, SemanticMatching, ResumeGeneration, FinalResponse, CandidateEvaluation }
 
 public abstract record AiMessage;
 public sealed record AiUserMessage(string Text) : AiMessage;

@@ -52,7 +52,12 @@ The default provider is OpenAI, using the Responses API with `gpt-6-luna`. Use t
 | --- | --- |
 | `AI:Provider` | `OpenAI` |
 | `AI:OpenAI:Model` | `gpt-6-luna` |
-| `AI:OpenAI:MaxOutputTokens` | `4096` |
+| `AI:OpenAI:MaxOutputTokens` | `16384` (application ceiling) |
+| `AI:OpenAI:TokenLimits:Agent` | `4096` |
+| `AI:OpenAI:TokenLimits:JobAnalysis` | `8192` |
+| `AI:OpenAI:TokenLimits:SemanticMatching` | `8192` |
+| `AI:OpenAI:TokenLimits:ResumeGeneration` | `8192` |
+| `AI:OpenAI:TokenLimits:FinalResponse` | `2048` |
 | `AI:OpenAI:RequestTimeoutSeconds` | `60` |
 
 The Responses client uses `store: false` and replays tool context within each agent request. OpenAI receives prompts and any profile-derived data needed for the selected operation. The API logs the model, outcome, elapsed time, and available input, output, and total token counts for each attempt. It omits prompts, CV contents, and API keys. API access and usage charges depend on your project. [GPT-6 Luna model ID, capabilities and limits](https://developers.openai.com/api/docs/models/gpt-6-luna)
@@ -95,19 +100,48 @@ The response includes the configured provider and model, elapsed milliseconds, a
 
 The route is unavailable outside Development and rejects non-loopback and browser-origin requests. It sends a fixed text prompt without profile data. To check tool calling separately, use AI Assistant with a synthetic profile and ask it to analyze a listing and draft a resume. Verify that both tool results appear.
 
-Free-tier access and limits depend on the model and Google project. Rate or quota limits can reject requests, and a project with billing enabled may incur charges. An agent turn can make several model requests. JobPilot never switches providers or models automatically. When Gemini is selected, prompts and relevant profile-derived data can be sent to Google, including resume tool results during agent chat. Check Google's applicable data-use terms before using a real profile. [API keys](https://ai.google.dev/gemini-api/docs/api-key) · [Rate limits](https://ai.google.dev/gemini-api/docs/rate-limits) · [Pricing and data use](https://ai.google.dev/gemini-api/docs/pricing)
+Free-tier access and limits depend on the model and Google project. Rate or quota limits can reject requests, and a project with billing enabled may incur charges. An agent turn can make several model requests. JobPilot never switches providers or models automatically. When Gemini is selected, prompts and relevant profile excerpts can be sent to Google. [API keys](https://ai.google.dev/gemini-api/docs/api-key) · [Rate limits](https://ai.google.dev/gemini-api/docs/rate-limits) · [Pricing and data use](https://ai.google.dev/gemini-api/docs/pricing)
 
 ## Master Profile Updates
 
-Open **Master CV** from the sidebar to maintain verified profile information. Job Analyzer can also add explicitly confirmed skills. Both workflows use the API's local `Data/candidate-profile.json`. For a read-only deployment directory, copy the profile to a private, writable location outside the repository and configure the API with the `CandidateProfile__Path` environment variable.
+Master CV, matching and resume generation use the same SQL Server profile. Apply the additive `20261123120000_AddCareerProfile` migration to the configured JobPilot database with the EF 10 CLI. If an older global tool is installed, use a project-local tool from PowerShell.
 
-Existing profiles load directly. Master CV shows legacy education and project text as editable entries. When you explicitly save, structured details are written alongside the existing text fields for compatibility. The API uses the latest file for matching and resume generation. No SQL migration or import is needed.
+```powershell
+dotnet tool install dotnet-ef --tool-path ./JobPilot.Api/obj/ef-tools --version 10.0.15
+./JobPilot.Api/obj/ef-tools/dotnet-ef.exe database update --project JobPilot.Api
+```
 
-`GET /api/profile` returns an ETag. A full update via `PUT /api/profile` requires that value in `If-Match`. If Skill Review or another editor saves first, the stale update receives HTTP 412. Copy any unsaved edits you want to keep, then reload the latest profile. The resume format uses verified skills, role details, education, projects, and certifications. Contact information stays in Master CV.
+Until a profile is saved, the API reads the previous private JSON file at `JobPilot.Api/Data/candidate-profile.json` or `CandidateProfile__Path`. The first explicit save or confirmed merge writes to SQL Server and keeps that file as a local backup. The database stores a versioned snapshot of structured experience, competencies, evidence, and sections flagged for review in the `CareerProfiles` table.
+
+1. Open **Master CV** and choose the private DOCX directly. For a server-side local file, place it in `JobPilot.Api/Data/Import/MasterCV.docx` and choose **Preview local import file**. Git ignores that directory.
+2. Review the full **Professional Profile**, each role's **Used Technologies** and projects, the education entries, and the source sections marked for review. Edit or remove incorrect entries and uncheck evidence you want excluded.
+3. If the document's professional profile should replace the saved text, select **Replace my saved Professional Profile** in the preview. Confirm the merge after review. Other conflicting values stay in Master CV for you to resolve. A stale preview requires reopening the import and reviewing the latest profile.
+
+DOCX extraction and preview use Open XML locally. Only explicitly documented evidence accepted in the preview and competencies you attest to become verified. Related competencies, uncertain sections, and saved evidence stay visible in Master CV.
+
+`GET /api/profile` returns an ETag. Profile saves and import confirmations send that value in `If-Match`. If another editor saves first, the stale update receives HTTP 412. Copy any unsaved edits you want to keep, then reload or preview again.
 
 ## Review a job and save a resume
 
-In **Job Analyzer**, analyze the listing and confirm any corrections you can support. Choose **Generate Tailored Resume** to open the editor. **Back to matching review** keeps the current draft and corrections while you switch views. Save the job and edited resume, or download the current draft as Word. Saved applications list their resume versions in the **Resume** tab. Saving an unchanged latest version reuses it. An unsaved Analyzer draft is held in the current page and is lost on reload.
+With OpenAI selected, Job Analyzer checks exact names and aliases locally, then evaluates unresolved broad capabilities in batches using selected Master CV evidence. Review the supporting excerpts under **AI Semantic Match**. Exact, equivalent, and supported semantic matches earn full credit, partial matches earn half, and required items have three times the weight of preferred items. If semantic evaluation is unavailable, use **Retry semantic evaluation**.
+
+Apply the additive `AddJobMatchReviews` migration with `dotnet ef database update --project JobPilot.Api` (or the project-local EF 10 CLI above). **Save job review** stores manual decisions for the analyzed listing without changing Master CV. **Save to Master Profile** is a separate action for verified competencies. To retrieve the job review, analyze the same listing again.
+
+### Run an AI Assistant workflow
+
+**Candidate Intelligence** evaluates the saved Master CV as a separate, versioned assessment. Choose **Evaluate Master CV** to create one or refresh it after changes to your profile. Job matching reuses its evidence references for the current profile version. In **Experience discovery**, review grouped questions and explicitly confirm your answers. Professional and personal project experience with supporting explanations become verified evidence. Familiarity, learning, and no-experience answers are retained for your review.
+
+Apply the additive `AddCandidateIntelligence` migration before using this page. Job analysis shows both weighted requirement coverage and equally weighted competency-area coverage. Each option in an explicit alternative stays visible. A valid Master CV and job listing allow resume drafting even when analysis is provisional or some requirements are missing.
+
+Apply the additive `AddAgentWorkflows` migration before running a chat workflow with a job listing. Paste a listing and ask the assistant to analyze it, or ask for analysis and a CV. The assistant saves analysis before drafting and stores the completed draft privately so you can open it in Resume Editor or export DOCX. Attaching it as a saved application resume remains an explicit action. **Retry unfinished step** reuses the recorded intent and completed analysis.
+
+OpenAI retries a step once when its response reports `max_output_tokens`, subject to the `AI:OpenAI:TokenRetryLimit` and application ceiling. Set per-step reasoning effort under `AI:OpenAI:ReasoningEffort`. For GPT-6 Luna, semantic matching defaults to `low` and the other steps default to `none`. Use `AI:OpenAI:ModelOutputLimit` to configure the documented ceiling when selecting another model. Logs include the stage, response ID, incomplete reason and token counts without prompt or CV contents.
+
+Semantic matching runs sequential batches of six by default. Configure `AI:SemanticMatching:BatchSize` (1–16), `AI:SemanticMatching:MaxOutputTokens` (defaults to the existing 8,192 semantic budget), and `AI:SemanticMatching:MaxRetryAttempts` (0 or 1). A token-limited batch splits in two for its retry, or gets a larger budget for a single requirement when the configured cap allows it. Validated results are kept. The Assistant saves them after each batch and shows a provisional score while requirements remain pending. The standalone analyzer retains them in its 30-minute cache. Retrying evaluates the pending requirements for the same saved profile and listing. Logs include batch sizes, token usage, reasoning effort, response status, incomplete reason, and validation counts without CV text.
+
+In **Job Analyzer**, review exact, equivalent, related and missing requirements. Exact and equivalent matches count toward the score. Related and missing review decisions stay on the page. Explicitly confirmed competencies can be saved with evidence. Choose **Include all Master CV positions** before generating if you want the full employment history in the draft. **Back to matching review** keeps the current draft and corrections while you switch views. Save the job and edited resume, or download the current draft as Word. Saved applications list their resume versions in the **Resume** tab. Saving an unchanged latest version reuses it. An unsaved Analyzer draft is held in the current page and is lost on reload.
+
+Job requirement extraction is cached in memory for 15 minutes, with up to 64 listings. Matching, scoring and corrections run locally. Resume generation sends a bounded shortlist of skills and role highlights. The editor assembles employers, dates, and other verified details locally. In Development, refresh **Development diagnostics** in Job Analyzer to see aggregate matching results and OpenAI requests and tokens. To estimate cost, set `AI__OpenAI__InputUsdPerMillionTokens` and `AI__OpenAI__OutputUsdPerMillionTokens` to your configured model's current USD rates. The estimate uses reported token totals and resets with the API process.
 
 The profile update endpoint is intended for the existing single-user, loopback deployment. Keep both applications bound to localhost for this workflow. A shared deployment needs user authentication and per-user authorization before exposing profile updates.
 

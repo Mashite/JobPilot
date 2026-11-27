@@ -1,0 +1,36 @@
+@using JobPilot.Web.Models
+
+@if (Assessment is { Areas.Count: > 0 } assessment)
+{
+    <section class="card card-body page-stack" aria-label="Overall professional suitability">
+        <h3>Overall professional suitability</h3>
+        <p><strong>@assessment.AreaCoverage% competency-area coverage</strong> @(Provisional ? "(provisional)" : "")</p>
+        <p class="text-muted">Each competency area has equal weight here. Detailed requirement coverage gives more weight to required items. An explicit alternative counts as one requirement, and each option stays visible. These scores describe the available evidence.</p>
+        <ul>
+            @foreach (var area in assessment.Areas)
+            {
+                <li><strong>@area.Name</strong> · @area.Coverage%</li>
+            }
+        </ul>
+        @foreach (var (title, items) in new[] { ("Critical gaps", assessment.CriticalGaps), ("Important gaps", assessment.ImportantGaps),
+            ("Needs clarification", assessment.NeedingClarification), ("Transferable experience", assessment.Transferable) })
+        {
+            @if (items.Count > 0)
+            {
+                <details>
+                    <summary>@title (@items.Count)</summary>
+                    <ul>@foreach (var item in items) { <li>@item</li> }</ul>
+                </details>
+            }
+        }
+        @if (assessment.NeedingClarification.Count > 0)
+        {
+            <a href="candidate-intelligence">Review experience discovery</a>
+        }
+    </section>
+}
+
+@code {
+    [Parameter] public JobSuitabilityView? Assessment { get; set; }
+    [Parameter] public bool Provisional { get; set; }
+}

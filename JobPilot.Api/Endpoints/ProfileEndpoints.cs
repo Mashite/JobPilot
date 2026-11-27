@@ -65,16 +65,17 @@ internal static class ProfileEndpoints
         }
     }
 
-    private static IResult ProfileResponse(HttpContext http, CandidateProfileSnapshot snapshot)
+    internal static IResult ProfileResponse(HttpContext http, CandidateProfileSnapshot snapshot)
     {
         http.Response.Headers.ETag = snapshot.Version;
         http.Response.Headers.CacheControl = "no-store";
         return Results.Ok(snapshot.Profile);
     }
 
-    private static bool IsStorageError(Exception ex) =>
-        ex is IOException or UnauthorizedAccessException or InvalidOperationException or JsonException;
+    internal static bool IsStorageError(Exception ex) =>
+        ex is IOException or UnauthorizedAccessException or InvalidOperationException or JsonException or
+            System.Data.Common.DbException or Microsoft.EntityFrameworkCore.DbUpdateException;
 
-    private static IResult StorageUnavailable() => Results.Problem(
-        statusCode: StatusCodes.Status503ServiceUnavailable, title: "The master profile file is unavailable.");
+    internal static IResult StorageUnavailable() => Results.Problem(
+        statusCode: StatusCodes.Status503ServiceUnavailable, title: "Master CV storage is unavailable.");
 }

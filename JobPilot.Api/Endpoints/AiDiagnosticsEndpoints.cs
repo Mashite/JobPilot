@@ -1,13 +1,16 @@
 using System.Diagnostics;
 using System.Net;
+using JobPilot.Api.Models;
+using JobPilot.Api.Services;
 using JobPilot.Api.Services.Ai;
 
 namespace JobPilot.Api.Endpoints;
 
 internal static class AiDiagnosticsEndpoints
 {
-    public static void MapAiDiagnostics(this IEndpointRouteBuilder endpoints) =>
-        endpoints.MapPost("/api/ai/test-connection", TestConnection)
+    public static void MapAiDiagnostics(this IEndpointRouteBuilder endpoints)
+    {
+        var diagnostics = endpoints.MapGroup("/api/ai")
             .AddEndpointFilter((context, next) =>
             {
                 var connection = context.HttpContext.Connection;
@@ -24,6 +27,32 @@ internal static class AiDiagnosticsEndpoints
 
                 return next(context);
             });
+        diagnostics.MapPost("/test-connection", TestConnection);
+        diagnostics.MapGet("/diagnostics", ReadDiagnostics);
+    }
+
+    private static async Task<IResult> ReadDiagnostics(HttpContext context, CandidateProfileService profiles,
+        AiProviderSelection selected, SkillNormalizer normalizer, OpenAiUsage usage, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var profile = await profiles.GetProfileAsync(cancellationToken);
+            var skills = profile.TechnicalSkills.Concat(profile.CareerEvidence
+                .Where(item => item.Verification != EvidenceVerification.Unverified).Select(item => item.OriginalName));
+            context.Response.Headers.CacheControl = "no-store";
+            return Results.Ok(new
+            {
+                masterCvLoaded = !string.IsNullOrWhiteSpace(profile.FullName),
+                employmentRecords = profile.Experiences.Count,
+                verifiedSkills = skills.Select(normalizer.Normalize).Distinct().Count(),
+                provider = selected.Name, model = selected.Model, openAi = usage.Snapshot()
+            });
+        }
+        catch (Exception ex) when (ProfileEndpoints.IsStorageError(ex))
+        {
+            return ProfileEndpoints.StorageUnavailable();
+        }
+    }
 
     private static async Task<IResult> TestConnection(
         IAiModelProvider provider, AiProviderSelection selected, CancellationToken cancellationToken)
@@ -33,7 +62,8 @@ internal static class AiDiagnosticsEndpoints
         deadline.CancelAfter(TimeSpan.FromSeconds(20));
         try
         {
-            var reply = await provider.GenerateAsync(new AiRequest("", [new AiUserMessage("Say Hello JobPilot.")]), deadline.Token);
+            var reply = await provider.GenerateAsync(new AiRequest("", [new AiUserMessage("Say Hello JobPilot.")],
+                MaxOutputTokens: 256), deadline.Token);
             if (string.IsNullOrWhiteSpace(reply.Text))
                 throw new AiProviderException("The selected provider returned no text.", diagnosticCode: "empty_response");
 

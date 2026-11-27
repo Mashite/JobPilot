@@ -17,7 +17,7 @@
     [Parameter] public string? Value { get; set; }
     [Parameter] public EventCallback<string?> ValueChanged { get; set; }
     [Parameter] public int? Rows { get; set; }
-    [Parameter] public int MaxLength { get; set; } = 250;
+    [Parameter] public int? MaxLength { get; set; } = 250;
     [Parameter] public bool Required { get; set; }
     [Parameter] public string Type { get; set; } = "text";
     [Parameter] public string? Autocomplete { get; set; }

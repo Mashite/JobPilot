@@ -22,7 +22,23 @@ public class CandidateProfile : ProfileEntry
     public List<ProfileEducation>? EducationDetails { get; set; }
     public List<ProfileCertification> Certifications { get; set; } = [];
     public List<ProfileProject>? ProjectDetails { get; set; }
+    public List<string> Languages { get; set; } = [];
+    public List<string> CoreStrengths { get; set; } = [];
+    public List<CareerEvidence> CareerEvidence { get; set; } = [];
+    public List<CareerSourceSection> ImportReviewSections { get; set; } = [];
 }
+
+[JsonConverter(typeof(JsonStringEnumConverter<EvidenceClassification>))]
+public enum EvidenceClassification { ExplicitlyDocumented, StronglyInferred, RelatedOrTransferable, Unsupported }
+[JsonConverter(typeof(JsonStringEnumConverter<EvidenceVerification>))]
+public enum EvidenceVerification { Unverified, ImportConfirmed, ManuallyConfirmed }
+
+public sealed record CareerEvidence(
+    Guid Id, string OriginalName, string NormalizedName, string Category, EvidenceClassification Classification,
+    EvidenceVerification Verification, string? Employer, string? Project, string SourceExcerpt, string SourceSection,
+    DateTimeOffset UpdatedAt, int? ConfirmedExperienceMonths = null, string? ExperienceScope = null);
+
+public sealed record CareerSourceSection(string Heading, List<string> Lines, bool RequiresReview, string? Kind = null);
 
 public abstract class ProfileEntry
 {
@@ -49,6 +65,7 @@ public class ProfileCertification : ProfileEntry
 public class ProfileProject : ProfileEntry
 {
     public string Name { get; set; } = "";
+    public string? Employer { get; set; }
     public string? Description { get; set; }
     public List<string> Technologies { get; set; } = [];
     public List<string> Achievements { get; set; } = [];

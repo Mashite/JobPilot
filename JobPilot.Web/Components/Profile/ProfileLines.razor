@@ -8,6 +8,7 @@
     [Parameter, EditorRequired] public List<string> Values { get; set; } = [];
     [Parameter] public EventCallback<List<string>> ValuesChanged { get; set; }
     [Parameter] public int Rows { get; set; } = 3;
+    [Parameter] public bool PreserveIndentation { get; set; }
 
     private readonly string fieldId = $"profile-lines-{Guid.NewGuid():N}";
     private string text = "";
@@ -17,7 +18,7 @@
     private Task UpdateAsync(string value)
     {
         text = value;
-        return ValuesChanged.InvokeAsync(
-            value.Split('\n', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries).ToList());
+        return ValuesChanged.InvokeAsync(value.Split('\n').Where(line => !string.IsNullOrWhiteSpace(line))
+            .Select(line => PreserveIndentation ? line.TrimEnd() : line.Trim()).ToList());
     }
 }

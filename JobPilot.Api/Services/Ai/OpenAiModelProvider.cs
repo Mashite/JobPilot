@@ -8,12 +8,15 @@ using OpenAI.Responses;
 
 namespace JobPilot.Api.Services.Ai;
 
-internal sealed record OpenAiProviderSettings(string Model, int MaxOutputTokens, TimeSpan RequestTimeout);
+internal sealed record OpenAiProviderSettings(string Model, int MaxOutputTokens, TimeSpan RequestTimeout,
+    IReadOnlyDictionary<AiOperation, int>? TokenLimits = null, int? RetryLimit = null,
+    IReadOnlyDictionary<AiOperation, string>? ReasoningEfforts = null);
 
 // The official SDK marks its Responses client as experimental.
 #pragma warning disable OPENAI001
 internal sealed class OpenAiModelProvider(
-    HttpClient httpClient, string apiKey, OpenAiProviderSettings settings, ILogger<OpenAiModelProvider> logger)
+    HttpClient httpClient, string apiKey, OpenAiProviderSettings settings, ILogger<OpenAiModelProvider> logger,
+    OpenAiUsage? usageMetrics = null)
     : IAiModelProvider, IDisposable
 {
     private const int MaxAttempts = 3;
@@ -31,10 +34,21 @@ internal sealed class OpenAiModelProvider(
     {
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         deadline.CancelAfter(settings.RequestTimeout);
-        var payload = CreatePayload(request);
+        var limit = request.SemanticBatch is not null && request.MaxOutputTokens is { } requestedSemanticLimit
+            ? Math.Min(settings.MaxOutputTokens, requestedSemanticLimit)
+            : settings.TokenLimits?.GetValueOrDefault(request.Operation) ??
+            Math.Min(settings.MaxOutputTokens, request.MaxOutputTokens ?? settings.MaxOutputTokens);
         try
         {
-            return await SendAsync(payload, deadline.Token);
+            try
+            {
+                return await SendAsync(request, limit, false, deadline.Token);
+            }
+            catch (AiProviderException ex) when (request.SemanticBatch is null && ex.DiagnosticCode == "max_output_tokens" &&
+                settings.RetryLimit is { } retryLimit && retryLimit > limit)
+            {
+                return await SendAsync(request, Math.Min(retryLimit, limit * 2), true, deadline.Token);
+            }
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
@@ -42,15 +56,18 @@ internal sealed class OpenAiModelProvider(
         }
     }
 
-    private async Task<AiAssistantMessage> SendAsync(BinaryData payload, CancellationToken cancellationToken)
+    private async Task<AiAssistantMessage> SendAsync(AiRequest request, int limit, bool tokenRetry, CancellationToken cancellationToken)
     {
+        var payload = CreatePayload(request, limit);
+        var effort = ReasoningEffort(request.Operation);
         for (var attempt = 1; ; attempt++)
         {
             cancellationToken.ThrowIfCancellationRequested();
             var started = Stopwatch.GetTimestamp();
             string outcome = "failed";
             int? upstreamStatus = null;
-            int? inputTokens = null, outputTokens = null, totalTokens = null;
+            int? inputTokens = null, outputTokens = null, totalTokens = null, reasoningTokens = null, responseLimit = null, responseBytes = null;
+            string? responseId = null, responseModel = null, responseStatus = null, incompleteReason = null;
             TimeSpan delay;
             try
             {
@@ -64,15 +81,25 @@ internal sealed class OpenAiModelProvider(
                 upstreamStatus = response.Status;
                 if (response.Status is >= 200 and < 300)
                 {
-                    using var json = JsonDocument.Parse(response.Content.ToMemory());
+                    var content = response.Content.ToMemory();
+                    responseBytes = content.Length;
+                    using var json = JsonDocument.Parse(content);
+                    responseId = SafeMetadata(ReadString(json.RootElement, "id"));
+                    responseModel = SafeMetadata(ReadString(json.RootElement, "model"));
+                    responseStatus = SafeMetadata(ReadString(json.RootElement, "status"));
+                    responseLimit = ReadTokenCount(json.RootElement, "max_output_tokens");
+                    if (json.RootElement.TryGetProperty("incomplete_details", out var details) && details.ValueKind == JsonValueKind.Object)
+                        incompleteReason = SafeMetadata(ReadString(details, "reason"));
                     if (json.RootElement.TryGetProperty("usage", out var usage) && usage.ValueKind == JsonValueKind.Object)
                     {
                         inputTokens = ReadTokenCount(usage, "input_tokens");
                         outputTokens = ReadTokenCount(usage, "output_tokens");
                         totalTokens = ReadTokenCount(usage, "total_tokens");
+                        if (usage.TryGetProperty("output_tokens_details", out var outputDetails) && outputDetails.ValueKind == JsonValueKind.Object)
+                            reasoningTokens = ReadTokenCount(outputDetails, "reasoning_tokens");
                     }
 
-                    var reply = MapReply(json.RootElement);
+                    var reply = MapReply(json.RootElement, responseStatus, incompleteReason);
                     outcome = "completed";
                     return reply;
                 }
@@ -115,27 +142,40 @@ internal sealed class OpenAiModelProvider(
             }
             finally
             {
+                var elapsed = (long)Stopwatch.GetElapsedTime(started).TotalMilliseconds;
+                var isTokenRetry = tokenRetry || request.SemanticBatch?.Retry > 0;
+                usageMetrics?.Record(inputTokens, outputTokens, elapsed, reasoningTokens, isTokenRetry);
+                var tool = request.Operation switch
+                {
+                    AiOperation.JobAnalysis or AiOperation.SemanticMatching => "analyze_job",
+                    AiOperation.ResumeGeneration => "generate_resume",
+                    _ => null
+                };
                 logger.LogInformation(
-                    "OpenAI request {Model} attempt {Attempt} outcome {Outcome} upstream HTTP {UpstreamStatus} elapsed {ElapsedMs} ms input tokens {InputTokens} output tokens {OutputTokens} total tokens {TotalTokens}",
-                    settings.Model, attempt, outcome, upstreamStatus, (long)Stopwatch.GetElapsedTime(started).TotalMilliseconds,
-                    inputTokens, outputTokens, totalTokens);
+                    "OpenAI request {Model} attempt {Attempt} outcome {Outcome} upstream HTTP {UpstreamStatus} elapsed {ElapsedMs} ms input tokens {InputTokens} output tokens {OutputTokens} total tokens {TotalTokens} response {ResponseId} actual model {ResponseModel} status {ResponseStatus} incomplete reason {IncompleteReason} output limit {OutputLimit} response limit {ResponseLimit} reasoning tokens {ReasoningTokens} stage {Stage} tool {Tool} token retry {TokenRetry} reasoning effort {ReasoningEffort} semantic batch {BatchNumber}/{BatchTotal} requirements {RequirementCount} evidence records {EvidenceCount} batch retry {BatchRetry} prompt characters {PromptCharacters} response bytes {ResponseBytes}",
+                    settings.Model, attempt, outcome, upstreamStatus, elapsed, inputTokens, outputTokens, totalTokens,
+                    responseId, responseModel, responseStatus, incompleteReason, limit, responseLimit, reasoningTokens,
+                    request.Operation, tool, isTokenRetry, effort, request.SemanticBatch?.Number, request.SemanticBatch?.Total,
+                    request.SemanticBatch?.RequirementCount, request.SemanticBatch?.EvidenceCount, request.SemanticBatch?.Retry,
+                    request.SemanticBatch?.PromptCharacters, responseBytes);
             }
 
             await Task.Delay(delay, cancellationToken);
         }
     }
 
-    private BinaryData CreatePayload(AiRequest request)
+    private BinaryData CreatePayload(AiRequest request, int limit)
     {
         var payload = new Dictionary<string, object>
         {
             ["model"] = settings.Model,
             ["store"] = false,
             ["input"] = MapHistory(request.History),
-            ["max_output_tokens"] = Math.Min(settings.MaxOutputTokens, request.MaxOutputTokens ?? settings.MaxOutputTokens)
+            ["max_output_tokens"] = limit
         };
-        if (settings.Model == "gpt-6-luna")
-            payload["reasoning"] = new { effort = "none" };
+        var effort = ReasoningEffort(request.Operation);
+        if (effort is not null)
+            payload["reasoning"] = new { effort };
         if (!string.IsNullOrWhiteSpace(request.Instructions))
             payload["instructions"] = request.Instructions;
         if (request.OutputSchema is { } schema)
@@ -152,6 +192,9 @@ internal sealed class OpenAiModelProvider(
         }
         return BinaryData.FromObjectAsJson(payload);
     }
+
+    private string? ReasoningEffort(AiOperation operation) => settings.ReasoningEfforts?.GetValueOrDefault(operation) ??
+        (settings.Model == "gpt-6-luna" ? "none" : null);
 
     private static IEnumerable<object> MapHistory(IEnumerable<AiMessage> history)
     {
@@ -179,11 +222,18 @@ internal sealed class OpenAiModelProvider(
         }
     }
 
-    private static AiAssistantMessage MapReply(JsonElement response)
+    private static AiAssistantMessage MapReply(JsonElement response, string? status, string? incompleteReason)
     {
-        if (ReadString(response, "status") is not "completed")
-            throw new AiProviderException("OpenAI did not complete the response. Check the output token limit or try again.",
-                diagnosticCode: "incomplete_response");
+        if (status == "incomplete")
+            throw incompleteReason switch
+            {
+                "max_output_tokens" => new AiProviderException("OpenAI reached this step’s output token limit.", diagnosticCode: "max_output_tokens"),
+                "content_filter" => new AiProviderException("OpenAI stopped this response because of its content filter.", diagnosticCode: "content_filter"),
+                "max_messages" => new AiProviderException("OpenAI reached its message limit for this step.", diagnosticCode: "max_messages"),
+                _ => new AiProviderException("OpenAI did not complete this step. Try again.", diagnosticCode: "incomplete_response")
+            };
+        if (status != "completed")
+            throw new AiProviderException("OpenAI did not return a completed response for this step.", diagnosticCode: "response_not_completed");
 
         var output = response.GetProperty("output");
         var text = new StringBuilder();
@@ -235,6 +285,9 @@ internal sealed class OpenAiModelProvider(
 
     private static string? ReadString(JsonElement item, string property) =>
         item.TryGetProperty(property, out var value) && value.ValueKind == JsonValueKind.String ? value.GetString() : null;
+
+    private static string? SafeMetadata(string? value) => value is { Length: > 0 and <= 128 } &&
+        value.All(character => char.IsAsciiLetterOrDigit(character) || character is '_' or '-' or '.') ? value : null;
 
     private static int? ReadTokenCount(JsonElement usage, string property) =>
         usage.TryGetProperty(property, out var value) && value.ValueKind == JsonValueKind.Number && value.TryGetInt32(out var count)

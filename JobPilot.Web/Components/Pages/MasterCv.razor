@@ -13,7 +13,12 @@
 
 <div class="page-intro">
     <h2>Master CV</h2>
+    <a href="candidate-intelligence">Review Candidate Intelligence</a>
     <p>Maintain the verified information JobPilot uses to match jobs and generate tailored resumes.</p>
+</div>
+
+<div class="actions-spaced">
+    <MasterCvImport Disabled="@(hasChanges || isSaving || isLoading)" Imported="LoadAsync" />
 </div>
 
 @if (profile is not { } draft)
@@ -48,14 +53,17 @@ else
                 </div>
             </section>
 
-            <section class="card card-body" aria-label="Professional summary">
-                <ProfileField Label="Professional summary" Rows="5" MaxLength="8000" @bind-Value="draft.Summary" />
+            <section class="card card-body" aria-label="Professional Profile">
+                <ProfileField Label="Professional Profile" Rows="12" MaxLength="null" @bind-Value="draft.Summary" />
+                <ProfileLines Label="Languages" @bind-Values="draft.Languages" />
+                <ProfileLines Label="Core Strengths" PreserveIndentation Rows="10" @bind-Values="draft.CoreStrengths" />
             </section>
 
             <ProfileEntries Items="draft.Experiences" Heading="Work experience" EntryName="Position"
                             EmptyText="No positions added." Reorder Changed="MarkChanged" Context="position">
                 <div class="profile-fields">
                     <ProfileField Label="Company" Required @bind-Value="position.Company" />
+                    <ProfileField Label="Location" @bind-Value="position.Location" />
                     <ProfileField Label="Job title" Required @bind-Value="position.Position" />
                     <ProfileField Label="Start date" MaxLength="60" Required @bind-Value="position.StartDate" />
                     @if (!position.IsCurrentPosition)
@@ -70,8 +78,12 @@ else
                 <div class="profile-lines">
                     <ProfileLines Label="Responsibilities" @bind-Values="position.Responsibilities" />
                     <ProfileLines Label="Achievements" @bind-Values="position.Achievements" />
-                    <ProfileLines Label="Technologies" @bind-Values="position.Technologies" />
+                    <ProfileLines Label="Used Technologies" @bind-Values="position.Technologies" />
                 </div>
+                @if (draft.ProjectDetails!.Any(project => project.Employer == position.Company))
+                {
+                    <p>Projects: @string.Join(" · ", draft.ProjectDetails!.Where(project => project.Employer == position.Company).Select(project => project.Name))</p>
+                }
             </ProfileEntries>
 
             <section class="card card-body page-stack" aria-labelledby="master-skills-heading">
@@ -80,7 +92,48 @@ else
                     <p class="text-muted">List skills you possess. Saving removes duplicates, including known aliases.</p>
                 </div>
                 <ProfileLines Label="Verified skills" Rows="7" @bind-Values="draft.TechnicalSkills" />
+                @foreach (var entry in draft.CareerEvidence.GroupBy(item => item.Category))
+                {
+                    <details>
+                        <summary>@entry.Key (@entry.Count())</summary>
+                        <ul class="skill-list">
+                            @foreach (var item in entry)
+                            {
+                                <li @key="item.Id">
+                                    <strong>@item.OriginalName</strong>
+                                    <small>@item.Classification · @item.SourceSection</small>
+                                    <small>@string.Join(" · ", new[] { item.Employer, item.Project }.Where(part => !string.IsNullOrWhiteSpace(part)))</small>
+                                    <small>@item.SourceExcerpt</small>
+                                    <label>
+                                        Verification for @item.OriginalName
+                                        <select class="form-select" @bind="item.Verification">
+                                            <option value="Unverified">Unverified</option>
+                                            @if (item.Classification == "ExplicitlyDocumented")
+                                            {
+                                                <option value="ImportConfirmed">Verified from the document</option>
+                                            }
+                                            <option value="ManuallyConfirmed">I confirm I have this competency</option>
+                                        </select>
+                                    </label>
+                                </li>
+                            }
+                        </ul>
+                    </details>
+                }
             </section>
+            @if (draft.ImportReviewSections.Count > 0)
+            {
+                <section class="card card-body" aria-label="Imported source for manual review">
+                    <h3>Professional sections and imported source</h3>
+                    @foreach (var section in draft.ImportReviewSections)
+                    {
+                        <details>
+                            <summary>@section.Heading @(section.RequiresReview ? "· Needs review" : "")</summary>
+                            <pre class="text-wrap">@string.Join("\n", section.Lines)</pre>
+                        </details>
+                    }
+                </section>
+            }
 
             <ProfileEntries Items="draft.EducationDetails!" Heading="Education" EntryName="Education entry"
                             EmptyText="No education entries added." Changed="MarkChanged" Context="education">
@@ -108,10 +161,11 @@ else
                             EmptyText="No projects added." Changed="MarkChanged" Context="project">
                 <div class="profile-fields">
                     <ProfileField Label="Project name" Required MaxLength="1000" @bind-Value="project.Name" />
+                    <ProfileField Label="Supporting employer" @bind-Value="project.Employer" />
                     <ProfileField Label="Project URL" Type="url" MaxLength="2000" @bind-Value="project.Url" />
                 </div>
                 <div class="profile-lines">
-                    <ProfileField Label="Description" Rows="3" MaxLength="4000" @bind-Value="project.Description" />
+                    <ProfileField Label="Description" Rows="6" MaxLength="65536" @bind-Value="project.Description" />
                     <ProfileLines Label="Technologies" @bind-Values="project.Technologies" />
                     <ProfileLines Label="Achievements" @bind-Values="project.Achievements" />
                 </div>

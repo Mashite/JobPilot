@@ -45,6 +45,11 @@
                 <span class="app-icon icon-saved" aria-hidden="true"></span>
                 Master CV
             </NavLink>
+            <NavLink href="candidate-intelligence" class="sidebar-link"
+                     aria-current="@CurrentPage("candidate-intelligence")" @onclick="CloseNavigationFromLink">
+                <span class="app-icon icon-analyzer" aria-hidden="true"></span>
+                Candidate Intelligence
+            </NavLink>
             <NavLink href="saved-jobs" class="@SavedJobsLinkClass"
                      aria-current="@CurrentPage("saved-jobs")" @onclick="CloseNavigationFromLink">
                 <span class="app-icon icon-saved" aria-hidden="true"></span>
@@ -85,6 +90,7 @@
         "ai-assistant/resume" => "Resume Draft",
         "saved-jobs" => "Saved Jobs",
         "master-cv" => "Master CV",
+        "candidate-intelligence" => "Candidate Intelligence",
         "error" => "Error",
         _ => IsApplicationWorkspace ? "Application Workspace" : "Page not found"
     };

@@ -22,6 +22,49 @@ namespace JobPilot.Api.Migrations
 
             SqlServerModelBuilderExtensions.UseIdentityColumns(modelBuilder);
 
+            modelBuilder.Entity("JobPilot.Api.Data.Entities.CandidateIntelligenceRecord", b =>
+                {
+                    b.Property<string>("EvaluationKey").HasMaxLength(64).HasColumnType("nvarchar(64)");
+                    b.Property<string>("ProfileVersion").IsRequired().HasMaxLength(68).HasColumnType("nvarchar(68)");
+                    b.Property<string>("Payload").IsRequired().HasColumnType("nvarchar(max)");
+                    b.HasKey("EvaluationKey");
+                    b.ToTable("CandidateIntelligence");
+                });
+            modelBuilder.Entity("JobPilot.Api.Data.Entities.ExperienceDiscoveryRecord", b =>
+                {
+                    b.Property<string>("SkillKey").HasMaxLength(64).HasColumnType("nvarchar(64)");
+                    b.Property<string>("ResponseJson").IsRequired().HasColumnType("nvarchar(max)");
+                    b.HasKey("SkillKey");
+                    b.ToTable("ExperienceDiscovery");
+                });
+
+            modelBuilder.Entity("JobPilot.Api.Data.Entities.AgentWorkflowRecord", b =>
+                {
+                    b.Property<Guid>("Id").HasColumnType("uniqueidentifier");
+                    b.Property<string>("InputHash").IsRequired().HasMaxLength(64).HasColumnType("nvarchar(64)");
+                    b.Property<string>("JobDescription").IsRequired().HasColumnType("nvarchar(max)");
+                    b.Property<string>("Intent").HasMaxLength(24).HasColumnType("nvarchar(24)");
+                    b.Property<string>("Stage").IsRequired().HasMaxLength(32).HasColumnType("nvarchar(32)");
+                    b.Property<string>("State").IsRequired().HasMaxLength(16).HasColumnType("nvarchar(16)");
+                    b.Property<string>("Failure").HasColumnType("nvarchar(max)");
+                    b.Property<string>("RequirementsJson").HasColumnType("nvarchar(max)");
+                    b.Property<string>("AnalysisJson").HasColumnType("nvarchar(max)");
+                    b.Property<string>("ResumeJson").HasColumnType("nvarchar(max)");
+                    b.Property<string>("Reply").HasColumnType("nvarchar(max)");
+                    b.HasKey("Id");
+                    b.ToTable("AgentWorkflows");
+                });
+
+            modelBuilder.Entity("JobPilot.Api.Data.Entities.CareerProfileRecord", b =>
+                {
+                    b.Property<int>("Id").HasColumnType("int");
+                    b.Property<string>("ProfileJson").IsRequired().HasColumnType("nvarchar(max)");
+                    b.Property<string>("Version").IsConcurrencyToken().IsRequired().HasMaxLength(68)
+                        .HasColumnType("nvarchar(68)");
+                    b.HasKey("Id");
+                    b.ToTable("CareerProfiles");
+                });
+
             modelBuilder.Entity("JobPilot.Api.Data.Entities.JobApplication", b =>
                 {
                     b.Property<int>("Id")
@@ -58,6 +101,14 @@ namespace JobPilot.Api.Migrations
                     b.HasKey("Id");
 
                     b.ToTable("JobApplications");
+                });
+
+            modelBuilder.Entity("JobPilot.Api.Data.Entities.JobMatchReviewRecord", b =>
+                {
+                    b.Property<string>("ListingKey").HasMaxLength(64).HasColumnType("nvarchar(64)");
+                    b.Property<string>("ReviewJson").IsRequired().HasColumnType("nvarchar(max)");
+                    b.HasKey("ListingKey");
+                    b.ToTable("JobMatchReviews");
                 });
 
             modelBuilder.Entity("JobPilot.Api.Data.Entities.SavedResume", b =>

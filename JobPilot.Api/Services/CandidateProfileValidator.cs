@@ -17,7 +17,6 @@ public class CandidateProfileValidator
 
         Check(Required(profile.FullName), "FullName", "Enter a full name of at most 250 characters.");
         Check(Required(profile.ProfessionalTitle), "ProfessionalTitle", "Enter a professional title of at most 250 characters.");
-        Check(Fits(profile.Summary, 8_000), "Summary", "Keep the summary to 8,000 characters.");
         Check(string.IsNullOrWhiteSpace(profile.Email) ||
             (Fits(profile.Email, 254) && MailAddress.TryCreate(profile.Email, out var address) && address.Address == profile.Email),
             "Email", "Enter an email address.");
@@ -27,8 +26,11 @@ public class CandidateProfileValidator
         Check(IsWebUrl(profile.GitHub), "GitHub", "Enter a valid HTTP or HTTPS link.");
         Check(profile.TechnicalSkills is { Count: <= 500 } && profile.TechnicalSkills.All(CandidateProfileService.IsValidSkill),
             "TechnicalSkills", "Enter up to 500 skills with valid names of at most 120 characters.");
+        Check(ValidLines(profile.Languages, 250) && ValidLines(profile.CoreStrengths), "ProfessionalProfile",
+            "Check the language and core strength fields.");
         Check(profile.Experiences is { Count: <= 100 } && profile.Experiences.All(experience =>
                 experience is not null && Required(experience.Company) && Required(experience.Position) &&
+                Fits(experience.Location) &&
                 Required(experience.StartDate, 60) &&
                 (experience.IsCurrentPosition || Required(experience.EndDate, 60)) &&
                 ValidLines(experience.Responsibilities) && ValidLines(experience.Achievements) &&
@@ -47,7 +49,7 @@ public class CandidateProfileValidator
         Check(profile.ProjectDetails is null
                 ? ValidLines(profile.Projects)
                 : profile.ProjectDetails is { Count: <= 100 } && profile.ProjectDetails.All(project =>
-                    project is not null && Required(project.Name, 1_000) && Fits(project.Description, 4_000) &&
+                    project is not null && Required(project.Name, 1_000) && Fits(project.Employer) && Fits(project.Description, 65_536) &&
                     IsWebUrl(project.Url) && ValidLines(project.Technologies, 120) && ValidLines(project.Achievements)),
             "Projects", "Each project needs a name. Check field lengths and optional HTTP or HTTPS links.");
         return errors;
@@ -76,8 +78,8 @@ public class CandidateProfileValidator
         if (string.IsNullOrWhiteSpace(profile.ProfessionalTitle))
             errors.Add("Professional title is required.");
 
-        if (profile.TechnicalSkills is null ||
-            profile.TechnicalSkills.Count == 0)
+        if (profile.TechnicalSkills is not { Count: > 0 } &&
+            !(profile.CareerEvidence ?? []).Any(item => item.Verification != EvidenceVerification.Unverified))
         {
             errors.Add("At least one technical skill is required.");
         }

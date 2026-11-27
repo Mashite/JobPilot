@@ -81,7 +81,8 @@ public sealed class AiProviderTests
         var history = model.Requests[1].Body.GetProperty("messages");
         Assert.True(history[2].TryGetProperty("tool_calls", out _));
         Assert.Equal("analyze_job", history[3].GetProperty("tool_name").GetString());
-        Assert.Equal("""{"matchScore":82}""", history[3].GetProperty("content").GetString());
+        using var replay = JsonDocument.Parse(history[3].GetProperty("content").GetString()!);
+        Assert.Equal(82, replay.RootElement.GetProperty("matchScore").GetInt32());
     }
 
     [Fact]
@@ -117,7 +118,8 @@ public sealed class AiProviderTests
         Assert.Equal("one", responseParts[0].GetProperty("functionResponse").GetProperty("id").GetString());
         var resumeResponse = responseParts[1].GetProperty("functionResponse");
         Assert.Equal("two", resumeResponse.GetProperty("id").GetString());
-        Assert.Equal("Test Candidate", resumeResponse.GetProperty("response").GetProperty("fullName").GetString());
+        Assert.True(resumeResponse.GetProperty("response").GetProperty("draftAvailable").GetBoolean());
+        Assert.False(resumeResponse.GetProperty("response").TryGetProperty("fullName", out _));
     }
 
     [Fact]

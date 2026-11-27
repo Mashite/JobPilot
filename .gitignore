@@ -14,12 +14,20 @@ secrets.json
 *.publishsettings
 /JobPilot.Api/Data/candidate-profile.json
 /JobPilot.Api/Data/candidate-profile.json.*
+**/Data/Import/*.docx
+**/Data/Import/
 JobPilotResume*.docx
 TailoredResume*.docx
 *.mdf
 *.ndf
 *.ldf
 *.bak
+*.bacpac
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
 
 # .NET build output and Visual Studio state
 [Bb]in/

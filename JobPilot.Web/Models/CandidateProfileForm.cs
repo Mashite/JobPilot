@@ -20,6 +20,10 @@ internal sealed class CandidateProfileForm : ProfileFormEntry
     public List<EducationForm>? EducationDetails { get; set; }
     public List<CertificationForm> Certifications { get; set; } = [];
     public List<ProjectForm>? ProjectDetails { get; set; }
+    public List<string> Languages { get; set; } = [];
+    public List<string> CoreStrengths { get; set; } = [];
+    public List<CareerEvidenceForm> CareerEvidence { get; set; } = [];
+    public List<CareerSourceSectionForm> ImportReviewSections { get; set; } = [];
 
     public void PrepareForEditing()
     {
@@ -33,6 +37,25 @@ internal sealed class CandidateProfileForm : ProfileFormEntry
     }
 }
 
+internal sealed class CareerEvidenceForm
+{
+    public Guid Id { get; set; }
+    public string OriginalName { get; set; } = "";
+    public string NormalizedName { get; set; } = "";
+    public string Category { get; set; } = "";
+    public string Classification { get; set; } = "";
+    public string Verification { get; set; } = "Unverified";
+    public string? Employer { get; set; }
+    public string? Project { get; set; }
+    public string SourceExcerpt { get; set; } = "";
+    public string SourceSection { get; set; } = "";
+    public DateTimeOffset UpdatedAt { get; set; }
+    public int? ConfirmedExperienceMonths { get; set; }
+    [JsonIgnore] public bool Include { get; set; } = true;
+}
+
+internal sealed record CareerSourceSectionForm(string Heading, List<string> Lines, bool RequiresReview, string? Kind = null);
+
 internal abstract class ProfileFormEntry
 {
     [JsonExtensionData]
@@ -42,6 +65,7 @@ internal abstract class ProfileFormEntry
 internal sealed class WorkExperienceForm : ProfileFormEntry
 {
     public string? Company { get; set; }
+    public string? Location { get; set; }
     public string? Position { get; set; }
     public string? StartDate { get; set; }
     public string? EndDate { get; set; }
@@ -70,6 +94,7 @@ internal sealed class CertificationForm : ProfileFormEntry
 internal sealed class ProjectForm : ProfileFormEntry
 {
     public string? Name { get; set; }
+    public string? Employer { get; set; }
     public string? Description { get; set; }
     public List<string> Technologies { get; set; } = [];
     public List<string> Achievements { get; set; } = [];

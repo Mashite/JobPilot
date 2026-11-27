@@ -1,0 +1,89 @@
+@page "/ai-assistant/analysis/{Id:guid}"
+@rendermode InteractiveServer
+@using JobPilot.Web.Models
+@inject IHttpClientFactory HttpClientFactory
+
+<PageTitle>Job Analysis - JobPilot</PageTitle>
+
+<div class="page-intro">
+    <h2>Job Analysis</h2>
+    <a href="ai-assistant">Back to AI Assistant</a>
+</div>
+
+@if (analysis is { } result)
+{
+    <JobSuitabilityPanel Assessment="result.Suitability" Provisional="result.IsScoreProvisional" />
+    <section class="card card-body page-stack">
+        <h3>@(string.IsNullOrWhiteSpace(result.JobTitle) ? "Analyzed job" : result.JobTitle)</h3>
+        <p><strong>@result.MatchScore% @(result.IsScoreProvisional ? "provisional match" : "match")</strong> · @result.MatchingSkills.Count of @result.Requirements.Count requirements satisfied</p>
+        @foreach (var warning in result.Warnings)
+        {
+            <p class="alert alert-warning">@warning</p>
+        }
+        @if (result.SemanticBatchFailures.Count > 1)
+        {
+            <ul class="text-muted">
+                @foreach (var batch in result.SemanticBatchFailures.GroupBy(failure => (failure.Batch, failure.Total)))
+                {
+                    <li>Batch @batch.Key.Batch of @batch.Key.Total · @batch.Sum(failure => failure.PendingRequirements) pending</li>
+                }
+            </ul>
+        }
+        <ul class="skill-list">
+            @foreach (var match in result.RequirementMatches)
+            {
+                <li>
+                    <strong>@match.Requirement.Skill · @JobMatchPresentation.Label(match.Status)</strong>
+                    <p>@match.Reason</p>
+                    @if (!string.IsNullOrWhiteSpace(match.Requirement.OriginalText))
+                    {
+                        <p class="text-muted">@match.Requirement.OriginalText</p>
+                    }
+                    @if (!string.IsNullOrWhiteSpace(match.EvidenceExcerpt))
+                    {
+                        <p>@match.EvidenceExcerpt</p>
+                    }
+                    @foreach (var citation in match.Citations ?? [])
+                    {
+                        <p>@citation.Employer @citation.Project · @citation.Excerpt</p>
+                    }
+                </li>
+            }
+        </ul>
+    </section>
+}
+else if (error is not null)
+{
+    <p class="alert alert-danger" role="alert">@error</p>
+}
+else
+{
+    <p role="status">Loading job analysis…</p>
+}
+
+@code {
+    [Parameter] public Guid Id { get; set; }
+
+    private JobAnalyzer.JobMatchResult? analysis;
+    private string? error;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        analysis = null;
+        error = null;
+        using var client = HttpClientFactory.CreateClient("JobPilotApi");
+        using var request = AgentWorkflowClient.Request(HttpMethod.Get, Id, "/analysis");
+        try
+        {
+            using var response = await client.SendAsync(request);
+            await response.EnsureJobPilotSuccessAsync();
+            analysis = await response.Content.ReadFromJsonAsync<JobAnalyzer.JobMatchResult>();
+            if (analysis is null)
+                error = "The saved job analysis was empty.";
+        }
+        catch (Exception ex) when (ex is HttpRequestException or System.Text.Json.JsonException or OperationCanceledException)
+        {
+            error = "The saved job analysis could not be loaded.";
+        }
+    }
+}

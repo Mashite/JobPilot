@@ -56,7 +56,7 @@ public sealed class JobMatchingRegressionTests : IDisposable
         Assert.Equal("C#", Detail(result, "C#").ProfileSkill);
         Assert.Equal("exact", Detail(result, "C#").Status);
         Assert.Equal("exact", Detail(result, "ASP.NET Core").Status);
-        Assert.Equal("exact", Detail(result, "CI/CD").Status);
+        Assert.Equal("equivalent", Detail(result, "CI/CD").Status);
         Assert.Equal("preferred", Detail(result, "CI/CD").Requirement.Importance);
         Assert.Equal("Strong proficiency in C# .NET Framework and ASP.NET Core", Detail(result, "C#").Requirement.OriginalText);
         Assert.Equal("related", Detail(result, "Entity Framework").Status);
@@ -71,7 +71,7 @@ public sealed class JobMatchingRegressionTests : IDisposable
         Assert.Contains("extraction succeeded True", log);
         Assert.Contains("extracted requirements 14 normalized requirements 19", log);
         Assert.Contains("verified profile skills 5 normalized verified skills 5", log);
-        Assert.Contains("exact 3 related 2 missing 14 score 17", log);
+        Assert.Contains("exact 2 equivalent 1 related 2 missing 14 score 17", log);
         Assert.DoesNotContain("Synthetic Candidate", log);
         Assert.DoesNotContain("Strong proficiency", log);
 

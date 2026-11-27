@@ -36,11 +36,14 @@ internal static class ApiResponseExtensions
                 return null;
 
             if (root.TryGetProperty("title", out var title) && title.ValueKind == JsonValueKind.String &&
-                title.GetString() is ("AI request failed" or "Master CV could not be loaded") &&
-                root.TryGetProperty("detail", out var detail) &&
-                detail.ValueKind == JsonValueKind.String)
+                title.GetString() is ("AI request failed" or "Master CV could not be loaded" or
+                    "Master CV storage is unavailable." or "Job review storage is unavailable." or "Agent workflow storage is unavailable." or
+                    "Candidate intelligence storage is unavailable."))
             {
-                return detail.GetString();
+                if (root.TryGetProperty("detail", out var detail) && detail.ValueKind == JsonValueKind.String &&
+                    !string.IsNullOrWhiteSpace(detail.GetString()))
+                    return detail.GetString();
+                return title.GetString();
             }
 
             if (validation && root.TryGetProperty("errors", out var errors) &&

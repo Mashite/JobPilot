@@ -9,12 +9,14 @@ public sealed class JobPilotAgentService(IAiModelProvider provider, IHttpClientF
 {
     private const int MaxIterations = 4;
     private const string Instructions = """
-        You are JobPilot, a job application assistant.
+        You are JobPilot, the candidate's personal job application assistant. The candidate decides whether to apply.
+        A requested resume should highlight verified experience and report gaps separately, even when job coverage is low.
 
         Use analyze_job to compare a job with the candidate profile.
         Use generate_resume to draft a tailored resume.
         If asked to analyze and generate a resume, perform both operations.
-        Use the supplied job description as the jobDescription tool argument. Do not call the same tool repeatedly.
+        For the jobDescription tool argument use the short placeholder "provided". JobPilot supplies the original listing.
+        Do not call the same tool repeatedly.
 
         Never invent candidate experience or qualifications.
         Never claim to have submitted or saved applications.
@@ -24,7 +26,7 @@ public sealed class JobPilotAgentService(IAiModelProvider provider, IHttpClientF
     private static readonly JsonElement ToolParameters = JsonSerializer.SerializeToElement(new
     {
         type = "object",
-        properties = new { jobDescription = new { type = "string", description = "The complete job description." } },
+        properties = new { jobDescription = new { type = "string", description = "Use the placeholder provided for the listing already supplied." } },
         required = new[] { "jobDescription" },
         additionalProperties = false
     });
@@ -50,13 +52,14 @@ public sealed class JobPilotAgentService(IAiModelProvider provider, IHttpClientF
         for (var iteration = 0; iteration < MaxIterations; iteration++)
         {
             var assistant = await provider.GenerateAsync(
-                new AiRequest(Instructions, history, Tools: Tools, Temperature: 0), cancellationToken);
+                new AiRequest(Instructions, history, Tools: Tools, Temperature: 0,
+                    Operation: iteration == 0 ? AiOperation.Agent : AiOperation.FinalResponse), cancellationToken);
 
             if (assistant.ToolCalls.Count == 0)
                 return new(string.IsNullOrWhiteSpace(assistant.Text) ? BuildSummary(executedTools) : assistant.Text, executedTools);
 
             history.Add(assistant);
-            foreach (var call in assistant.ToolCalls)
+            foreach (var call in assistant.ToolCalls.OrderBy(call => call.Name == "generate_resume"))
             {
                 JsonElement result;
                 var endpoint = call.Name switch
@@ -74,6 +77,9 @@ public sealed class JobPilotAgentService(IAiModelProvider provider, IHttpClientF
                     result = Error("Job description is required.");
                 else if (!HasValidArguments(call.Arguments))
                     result = Error("Tool arguments must contain one non-empty jobDescription string.");
+                else if (call.Name == "generate_resume" && executedTools.Any(tool => tool.ToolName == "analyze_job" &&
+                    tool.Result.ValueKind == JsonValueKind.Object && tool.Result.TryGetProperty("error", out _)))
+                    result = Error("Job analysis must complete before a resume can be generated.");
                 else
                 {
                     // Use the user-supplied description. Model-generated arguments do not control business actions.
@@ -81,11 +87,32 @@ public sealed class JobPilotAgentService(IAiModelProvider provider, IHttpClientF
                     executedTools.Add(new(call.Name, result));
                 }
 
-                history.Add(new AiToolResultMessage(call, result));
+                history.Add(new AiToolResultMessage(call, SummarizeToolResult(call.Name, result)));
             }
         }
 
         return new("The agent reached its execution limit. " + BuildSummary(executedTools), executedTools);
+    }
+
+    private static JsonElement SummarizeToolResult(string name, JsonElement result)
+    {
+        if (result.ValueKind != JsonValueKind.Object || result.TryGetProperty("error", out _))
+            return result;
+        if (name == "generate_resume")
+            return JsonSerializer.SerializeToElement(new { draftAvailable = true });
+        if (name == "analyze_job")
+        {
+            return JsonSerializer.SerializeToElement(new
+            {
+                matchScore = result.TryGetProperty("matchScore", out var score) ? (JsonElement?)score : null,
+                matchedCount = ArrayCount("matchingSkills"),
+                missingOrUnverifiedCount = ArrayCount("missingOrUnverifiedSkills")
+            });
+        }
+        return result;
+
+        int ArrayCount(string property) => result.TryGetProperty(property, out var array) && array.ValueKind == JsonValueKind.Array
+            ? array.GetArrayLength() : 0;
     }
 
     private static bool HasValidArguments(JsonElement arguments) =>

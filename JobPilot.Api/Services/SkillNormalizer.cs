@@ -33,6 +33,7 @@ public class SkillNormalizer
 
             [".net"] = "dotnet",
             [".net core"] = "dotnet",
+            [".net / .net core"] = "dotnet",
             ["dotnet"] = "dotnet",
             [".net framework"] = "dotnetframework",
             ["dotnet framework"] = "dotnetframework",
@@ -49,9 +50,12 @@ public class SkillNormalizer
             ["continuous integration and continuous delivery"] = "ci/cd",
             ["continuous integration and continuous deployment"] = "ci/cd",
             ["devops practices"] = "devops",
+            ["application architecture"] = "software architecture",
+            ["software design principles"] = "software design principles",
 
             ["plc integration"] = "plcintegration",
             ["plc communication"] = "plcintegration",
+            ["wcf services"] = "wcf",
 
             ["azure devops"] = "azuredevops",
             ["azure cloud services"] = "azurecloud",
@@ -81,12 +85,21 @@ public class SkillNormalizer
             : value;
     }
 
+    internal IEnumerable<string> NamesFor(string skill)
+    {
+        yield return skill;
+        var canonical = Normalize(skill);
+        foreach (var alias in Aliases.Where(item => item.Value.Equals(canonical, StringComparison.OrdinalIgnoreCase)))
+            yield return alias.Key;
+    }
+
     // Related skills supply context for review. Equivalence and score use Normalize only.
     public bool AreRelated(string requirementKey, string profileKey) => (requirementKey, profileKey) switch
     {
         ("dotnet", "dotnetframework") or ("dotnetframework", "dotnet") => true,
         ("entityframework", "entityframeworkcore") or ("entityframeworkcore", "entityframework") => true,
         ("devops", "azuredevops") or ("azuredevops", "devops") => true,
+        ("software design patterns", "software architecture") or ("software design principles", "software architecture") => true,
         _ => false
     };
 

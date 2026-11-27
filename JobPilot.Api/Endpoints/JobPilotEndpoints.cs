@@ -35,6 +35,10 @@ internal static class JobPilotEndpoints
                     ["diagnosticCode"] = ex.DiagnosticCode
                 });
         }
+        catch (Exception ex) when (ex is System.Data.Common.DbException or Microsoft.EntityFrameworkCore.DbUpdateException)
+        {
+            return ProfileEndpoints.StorageUnavailable();
+        }
     }
 
     private static async Task<IResult> AnalyzeJob(
@@ -51,6 +55,7 @@ internal static class JobPilotEndpoints
 
     private static async Task<IResult> MatchJob(
         AnalyzeJobRequest request,
+        HttpContext context,
         CandidateProfileService profileService,
         JobAnalysisService analysis,
         JobMatchingService matchingService,
@@ -68,22 +73,28 @@ internal static class JobPilotEndpoints
         JobMatchResult? match = null;
         try
         {
-            var profile = await profileService.GetProfileAsync(cancellationToken);
+            var snapshot = await profileService.GetSnapshotAsync(cancellationToken);
+            var profile = snapshot.Profile;
             verifiedCount = profile.TechnicalSkills?.Count(skill => !string.IsNullOrWhiteSpace(skill)) ?? 0;
             stage = "extraction";
             extracted = await analysis.ExtractRequirementsAsync(request.JobDescription, cancellationToken);
             stage = "matching";
-            match = matchingService.Match(extracted, profile);
+            var semantic = context.RequestServices.GetService<SemanticJobMatcher>();
+            if (semantic is null)
+                match = matchingService.Match(extracted, profile);
+            else
+                match = await JobMatchingWorkflow.MatchAsync(request.JobDescription, extracted, snapshot, semantic,
+                    context.RequestServices.GetService<JobMatchReviewStore>(), logger, cancellationToken);
             stage = "completed";
             return Results.Ok(match);
         }
         catch (Exception ex)
         {
             errorType = ex.GetType().Name;
-            if (stage == "profile_load" && ex is (IOException or UnauthorizedAccessException or JsonException or InvalidOperationException))
+            if (stage == "profile_load" && ProfileEndpoints.IsStorageError(ex))
             {
                 return Results.Problem(title: "Master CV could not be loaded",
-                    detail: "Open Master CV and check that the configured profile file is available and readable.",
+                    detail: "Open Master CV and check the configured profile storage.",
                     statusCode: StatusCodes.Status503ServiceUnavailable);
             }
             throw;
@@ -91,11 +102,18 @@ internal static class JobPilotEndpoints
         finally
         {
             logger.Log(errorType is null ? LogLevel.Information : LogLevel.Warning,
-                "Job match provider {Provider} model {Model} stage {Stage} extraction succeeded {ExtractionSucceeded} extracted requirements {ExtractedRequirements} normalized requirements {NormalizedRequirements} verified profile skills {VerifiedSkills} normalized verified skills {NormalizedVerifiedSkills} exact {ExactMatches} related {RelatedMatches} missing {MissingRequirements} score {MatchScore} error type {ErrorType}",
+                "Job match provider {Provider} model {Model} stage {Stage} extraction succeeded {ExtractionSucceeded} extracted requirements {ExtractedRequirements} normalized requirements {NormalizedRequirements} verified profile skills {VerifiedSkills} normalized verified skills {NormalizedVerifiedSkills} exact {ExactMatches} equivalent {EquivalentMatches} related {RelatedMatches} missing {MissingRequirements} score {MatchScore} error type {ErrorType}",
                 activeProvider.Name, activeProvider.Model, stage, extracted is not null, extracted?.ExtractedItemCount,
-                match?.Requirements.Count, verifiedCount, match?.NormalizedVerifiedSkillCount, match?.MatchingSkills.Count,
+                match?.Requirements.Count, match?.VerifiedSkillCount ?? verifiedCount, match?.NormalizedVerifiedSkillCount,
+                match?.RequirementMatches.Count(item => item.Status == "exact"),
+                match?.RequirementMatches.Count(item => item.Status == "equivalent"),
                 match?.RequirementMatches.Count(item => item.Status == "related"),
                 match?.RequirementMatches.Count(item => item.Status == "missing"), match?.MatchScore, errorType);
+            if (match?.SemanticStatus is { } semanticStatus)
+                logger.LogInformation("Semantic match status {Status}. Supported {SemanticMatches} partial {PartialMatches} needs verification {NeedsVerification}",
+                    semanticStatus, match.RequirementMatches.Count(item => item.Status == "semantic"),
+                    match.RequirementMatches.Count(item => item.Status == "partial"),
+                    match.RequirementMatches.Count(item => item.Status == "needs_verification"));
         }
     }
 
@@ -120,7 +138,8 @@ internal static class JobPilotEndpoints
         }
 
         var resume = await resumeGenerator.GenerateAsync(
-            request.JobDescription, profile, cancellationToken, request.ConfirmedSkills, request.ConfirmedEvidence);
+            request.JobDescription, profile, cancellationToken, request.ConfirmedSkills, request.ConfirmedEvidence,
+            request.IncludeAllExperiences);
         return Results.Ok(resume);
     }
 

@@ -7,6 +7,7 @@ internal static class AiProviderRegistration
     public static IServiceCollection AddJobPilotAi(this IServiceCollection services, IConfiguration configuration)
     {
         const string clientName = "JobPilotAi";
+        services.AddSingleton(_ => new OpenAiUsage(configuration));
         var provider = configuration["AI:Provider"] ?? "OpenAI";
         if (provider.Equals("OpenAI", StringComparison.OrdinalIgnoreCase))
         {
@@ -18,15 +19,43 @@ internal static class AiProviderRegistration
             if (string.IsNullOrWhiteSpace(apiKey) || apiKey.Any(character => character < '!' || character > '~'))
                 throw new InvalidOperationException("Set AI:OpenAI:ApiKey using JobPilot.Api User Secrets or an environment variable.");
 
-            var maxTokens = ReadLimit(configuration, "AI:OpenAI:MaxOutputTokens", 4096, 128, 32768);
+            const int documentedLunaLimit = 128_000;
+            var isLuna = model.Equals("gpt-6-luna", StringComparison.OrdinalIgnoreCase) ||
+                model.StartsWith("gpt-6-luna-", StringComparison.OrdinalIgnoreCase);
+            var modelLimit = ReadLimit(configuration, "AI:OpenAI:ModelOutputLimit",
+                isLuna ? documentedLunaLimit : 16_384, 128, documentedLunaLimit);
+            var maxTokens = ReadLimit(configuration, "AI:OpenAI:MaxOutputTokens", Math.Min(16_384, modelLimit), 128, modelLimit);
+            var retryLimit = ReadLimit(configuration, "AI:OpenAI:TokenRetryLimit", maxTokens, 128, maxTokens);
+            var defaults = new Dictionary<AiOperation, int>
+            {
+                [AiOperation.Agent] = 4096, [AiOperation.JobAnalysis] = 8192, [AiOperation.SemanticMatching] = 8192,
+                [AiOperation.ResumeGeneration] = 8192, [AiOperation.FinalResponse] = 2048, [AiOperation.CandidateEvaluation] = 6000
+            };
+            var limits = defaults.ToDictionary(item => item.Key, item => Math.Min(maxTokens,
+                ReadLimit(configuration, $"AI:OpenAI:TokenLimits:{item.Key}", item.Value, 128, modelLimit)));
+            var efforts = new Dictionary<AiOperation, string>();
+            foreach (var operation in defaults.Keys)
+            {
+                var key = $"AI:OpenAI:ReasoningEffort:{operation}";
+                var effort = configuration[key] ?? (isLuna
+                    ? operation is AiOperation.SemanticMatching or AiOperation.CandidateEvaluation ? "low" : "none" : null);
+                if (effort is null)
+                    continue;
+                if (effort is not ("none" or "minimal" or "low" or "medium" or "high" or "xhigh" or "max") ||
+                    (isLuna && effort == "minimal"))
+                    throw new InvalidOperationException($"{key} is not supported for the configured model.");
+                efforts.Add(operation, effort);
+            }
             var timeoutSeconds = ReadLimit(configuration, "AI:OpenAI:RequestTimeoutSeconds", 60, 1, 120);
-            var settings = new OpenAiProviderSettings(model, maxTokens, TimeSpan.FromSeconds(timeoutSeconds));
+            var settings = new OpenAiProviderSettings(model, maxTokens, TimeSpan.FromSeconds(timeoutSeconds), limits, retryLimit, efforts);
+            services.AddSingleton(SemanticMatchingOptions.Read(configuration, modelLimit, maxTokens, retryLimit,
+                limits[AiOperation.SemanticMatching]));
             AddClient(services, clientName, new Uri("https://api.openai.com/"))
                 .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false });
             services.AddSingleton(new AiProviderSelection("OpenAI", model));
             services.AddScoped<IAiModelProvider>(scope =>
                 new OpenAiModelProvider(scope.GetRequiredService<IHttpClientFactory>().CreateClient(clientName),
-                    apiKey, settings, scope.GetRequiredService<ILogger<OpenAiModelProvider>>()));
+                    apiKey, settings, scope.GetRequiredService<ILogger<OpenAiModelProvider>>(), scope.GetRequiredService<OpenAiUsage>()));
         }
         else if (provider.Equals("Ollama", StringComparison.OrdinalIgnoreCase))
         {

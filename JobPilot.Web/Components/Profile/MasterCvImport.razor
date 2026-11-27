@@ -1,0 +1,290 @@
+@using System.Net
+@using JobPilot.Web.Models
+@inject IHttpClientFactory HttpClientFactory
+
+<section class="card card-body page-stack" aria-labelledby="master-import-heading">
+    <div>
+        <h3 id="master-import-heading">Import a Master CV</h3>
+        <p class="text-muted">Choose a Word DOCX to extract and review locally. Existing records are kept when an import conflicts.</p>
+    </div>
+    <div class="actions">
+        <label for="master-cv-file">Word document</label>
+        <InputFile id="master-cv-file" accept=".docx" disabled="@(Disabled || busy)" OnChange="UploadAsync" />
+        <button type="button" class="btn btn-outline-primary" disabled="@(Disabled || busy)"
+                @onclick="() => PreviewAsync(null)">Preview local import file</button>
+    </div>
+    @if (busy)
+    {
+        <p role="status">Processing Master CV…</p>
+    }
+    @if (error is not null)
+    {
+        <div role="alert" class="alert alert-danger">@error</div>
+    }
+    @if (message is not null)
+    {
+        <div role="status" class="alert alert-success">@message</div>
+    }
+
+    @if (preview is { } review)
+    {
+        var profile = review.Profile;
+        <fieldset disabled="@(Disabled || busy)" class="page-stack" @key="review">
+            <legend>Import preview</legend>
+            @foreach (var conflict in review.Conflicts)
+            {
+                <p class="alert alert-warning">@conflict</p>
+            }
+            <div class="page-stack">
+                <ProfileField Label="Imported full name" @bind-Value="profile.FullName" />
+                <ProfileField Label="Imported professional title" @bind-Value="profile.ProfessionalTitle" />
+                <ProfileField Label="Imported location" @bind-Value="profile.Location" />
+                <ProfileField Label="Professional Profile" Rows="12" MaxLength="null" @bind-Value="profile.Summary" />
+                <ProfileLines Label="Languages" @bind-Values="profile.Languages" />
+                <ProfileLines Label="Core Strengths" PreserveIndentation Rows="10" @bind-Values="profile.CoreStrengths" />
+            </div>
+            <ProfileEntries Items="profile.Experiences" Heading="Detected employment" EntryName="Position"
+                            EmptyText="No employment records were confidently detected." Context="role">
+                <div class="page-stack">
+                    <ProfileField Label="Employer" @bind-Value="role.Company" />
+                    <ProfileField Label="Location" @bind-Value="role.Location" />
+                    <ProfileField Label="Job title" @bind-Value="role.Position" />
+                    <ProfileField Label="Start date" MaxLength="60" @bind-Value="role.StartDate" />
+                    <ProfileField Label="End date" MaxLength="60" @bind-Value="role.EndDate" />
+                    <label><input type="checkbox" @bind="role.IsCurrentPosition" /> Current position</label>
+                    <ProfileLines Label="Responsibilities" @bind-Values="role.Responsibilities" />
+                    <ProfileLines Label="Achievements and business impact" @bind-Values="role.Achievements" />
+                    <ProfileLines Label="Used Technologies" @bind-Values="role.Technologies" />
+                    @if (profile.ProjectDetails!.Any(project => project.Employer == role.Company))
+                    {
+                        <p>Projects: @string.Join(" · ", profile.ProjectDetails!.Where(project => project.Employer == role.Company).Select(project => project.Name))</p>
+                    }
+                </div>
+            </ProfileEntries>
+            <ProfileEntries Items="profile.EducationDetails!" Heading="Detected education" EntryName="Education entry"
+                            EmptyText="No education records were confidently detected." Context="education">
+                <div class="page-stack">
+                    <ProfileField Label="Degree" @bind-Value="education.Degree" />
+                    <ProfileField Label="Institution" @bind-Value="education.Institution" />
+                    <ProfileField Label="Graduation date" MaxLength="60" @bind-Value="education.GraduationDate" />
+                    <ProfileField Label="Documented date range or details" @bind-Value="education.Details" />
+                </div>
+            </ProfileEntries>
+            <ProfileEntries Items="profile.Certifications" Heading="Detected certifications" EntryName="Certification"
+                            EmptyText="No certifications were confidently detected." Context="certification">
+                <ProfileField Label="Certification" @bind-Value="certification.Name" />
+                <ProfileField Label="Issuer" @bind-Value="certification.Issuer" />
+                <ProfileField Label="Date" MaxLength="60" @bind-Value="certification.Date" />
+                <ProfileField Label="URL" Type="url" @bind-Value="certification.Url" />
+            </ProfileEntries>
+            <ProfileEntries Items="profile.ProjectDetails!" Heading="Detected projects" EntryName="Project"
+                            EmptyText="Review project descriptions in the employment and source sections." Context="project">
+                <ProfileField Label="Project title" @bind-Value="project.Name" />
+                <ProfileField Label="Supporting employer" @bind-Value="project.Employer" />
+                <ProfileField Label="Project description" Rows="6" MaxLength="65536" @bind-Value="project.Description" />
+                <ProfileLines Label="Project achievements" @bind-Values="project.Achievements" />
+            </ProfileEntries>
+            <div class="page-stack">
+                <h4>Technical Profile and supporting evidence</h4>
+                <p class="text-muted">Uncheck entries to exclude them. If you change an extracted name, select its verification status again.</p>
+                @foreach (var category in profile.CareerEvidence.GroupBy(item => item.Category))
+                {
+                    <details class="card card-body">
+                        <summary>@category.Key (@category.Count())</summary>
+                        @foreach (var item in category)
+                        {
+                            <div class="page-stack actions-spaced">
+                                <label><input type="checkbox" @bind="item.Include" /> Include @item.OriginalName</label>
+                                <ProfileField Label="Skill or competency" MaxLength="120"
+                                              @bind-Value:get="item.OriginalName" @bind-Value:set="name => EditName(item, name)" />
+                                <p class="text-muted">@item.Classification · @item.SourceSection @item.Employer @item.Project</p>
+                                <blockquote class="break-word">@item.SourceExcerpt</blockquote>
+                                <label>
+                                    Verification
+                                    <select class="form-select" @bind="item.Verification">
+                                        <option value="Unverified">Keep as unverified evidence</option>
+                                        @if (item.Classification == "ExplicitlyDocumented")
+                                        {
+                                            <option value="ImportConfirmed">Verify documented skill on merge</option>
+                                        }
+                                        <option value="ManuallyConfirmed">I can personally verify this skill</option>
+                                    </select>
+                                </label>
+                            </div>
+                        }
+                    </details>
+                }
+            </div>
+            <div class="page-stack">
+                <h4>Original source sections</h4>
+                @for (var index = 0; index < profile.ImportReviewSections.Count; index++)
+                {
+                    var sectionIndex = index;
+                    var section = profile.ImportReviewSections[index];
+                    <details>
+                        <summary>@section.Heading @(section.RequiresReview ? "· Needs review" : "")</summary>
+                        @if (section.Kind is "themes" or "philosophy")
+                        {
+                            <ProfileLines Label="@section.Heading" Values="@section.Lines" Rows="6" PreserveIndentation
+                                          ValuesChanged="lines => profile.ImportReviewSections[sectionIndex] = section with { Lines = lines }" />
+                        }
+                        else
+                        {
+                            <pre class="text-wrap">@string.Join("\n", section.Lines)</pre>
+                        }
+                    </details>
+                }
+            </div>
+            @if (review.Diagnostics is { } diagnostics)
+            {
+                <details>
+                    <summary>Development parsing diagnostics</summary>
+                    <p>@string.Join(" · ", diagnostics.MainSections)</p>
+                    <ul>
+                        <li>Professional Profile detected: @(diagnostics.ProfessionalProfileExtracted ? "Yes" : "No")</li>
+                        <li>@diagnostics.EmploymentRecords employment records · @diagnostics.ProjectCount projects</li>
+                        <li>@diagnostics.CoreStrengthsCount core strengths · @diagnostics.TechnicalSkillsCount technical skills</li>
+                        @for (var index = 0; index < diagnostics.EmployerTechnologyCounts.Count; index++)
+                        {
+                            <li>Employment record @(index + 1) · @diagnostics.EmployerTechnologyCounts[index] technologies</li>
+                        }
+                        <li>@diagnostics.UnrecognizedSectionCount unrecognized sections · @diagnostics.SectionsNeedingReview sections flagged</li>
+                    </ul>
+                </details>
+            }
+            @if (!string.IsNullOrWhiteSpace(profile.Summary))
+            {
+                <label><input type="checkbox" @bind="replaceProfessionalProfile" /> Replace my saved Professional Profile with the reviewed text above</label>
+            }
+            <label><input type="checkbox" @bind="confirmed" /> I reviewed these items and confirm a non-destructive merge.</label>
+            <div class="actions">
+                <button type="button" class="btn btn-primary" disabled="@(!confirmed)" @onclick="ConfirmAsync">Merge into Master CV</button>
+                <button type="button" class="btn btn-outline-primary" @onclick="Cancel">Cancel import</button>
+            </div>
+        </fieldset>
+    }
+</section>
+
+@code {
+    private const string Unverified = "Unverified";
+    private const int MaxBytes = 10 * 1024 * 1024;
+    private ImportPreview? preview;
+    private string? version, message, error;
+    private bool busy, confirmed, replaceProfessionalProfile;
+
+    [Parameter] public bool Disabled { get; set; }
+    [Parameter] public EventCallback Imported { get; set; }
+
+    private Task UploadAsync(InputFileChangeEventArgs args) => PreviewAsync(args.File);
+
+    private async Task PreviewAsync(IBrowserFile? file)
+    {
+        if (Disabled || busy)
+            return;
+        Cancel();
+        message = error = null;
+        busy = true;
+        try
+        {
+            using var client = HttpClientFactory.CreateClient("JobPilotApi");
+            using var request = new HttpRequestMessage(HttpMethod.Post, "api/profile/import/preview");
+            request.Headers.Add("X-JobPilot-Profile-Write", "1");
+            if (file is not null)
+                request.Content = new StreamContent(file.OpenReadStream(MaxBytes));
+            using var response = await client.SendAsync(request);
+            await response.EnsureJobPilotSuccessAsync();
+            var parsed = await response.Content.ReadFromJsonAsync<ImportPreview>()
+                ?? throw new InvalidOperationException("The API did not return an import preview.");
+            version = response.Headers.ETag?.ToString() ?? throw new InvalidOperationException("The API did not return a profile version.");
+            parsed.Profile.PrepareForEditing();
+            foreach (var item in parsed.Profile.CareerEvidence.Where(item => item.Classification == "ExplicitlyDocumented"))
+                item.Verification = "ImportConfirmed";
+            preview = parsed;
+        }
+        catch (IOException)
+        {
+            error = "The document could not be read. Select a DOCX of at most 10 MB.";
+        }
+        catch (HttpRequestException ex)
+        {
+            error = ex.StatusCode == HttpStatusCode.ServiceUnavailable
+                ? "Master CV storage is unavailable. Check SQL Server and the profile migration."
+                : ex.Message;
+        }
+        catch (Exception)
+        {
+            error = "The import preview could not be loaded.";
+        }
+        finally
+        {
+            busy = false;
+        }
+    }
+
+    private async Task ConfirmAsync()
+    {
+        if (Disabled || busy || !confirmed || preview is not { } current || version is null)
+            return;
+        busy = true;
+        error = null;
+        try
+        {
+            using var client = HttpClientFactory.CreateClient("JobPilotApi");
+            var profile = current.Profile;
+            var allEvidence = profile.CareerEvidence;
+            profile.CareerEvidence = allEvidence.Where(item => item.Include).ToList();
+            using var request = new HttpRequestMessage(HttpMethod.Post, "api/profile/import/confirm")
+            {
+                Content = JsonContent.Create(System.Text.Json.JsonSerializer.SerializeToElement(
+                    new { confirmed = true, profile, replaceProfessionalProfile }, System.Text.Json.JsonSerializerOptions.Web))
+            };
+            profile.CareerEvidence = allEvidence;
+            request.Headers.Add("X-JobPilot-Profile-Write", "1");
+            request.Headers.IfMatch.ParseAdd(version);
+            using var response = await client.SendAsync(request);
+            if (response.StatusCode == HttpStatusCode.PreconditionFailed)
+            {
+                error = "Master CV changed after this preview. Preview the document again before merging.";
+                return;
+            }
+            await response.EnsureJobPilotSuccessAsync();
+            Cancel();
+            message = "Reviewed data merged into Master CV.";
+            await Imported.InvokeAsync();
+        }
+        catch (HttpRequestException ex)
+        {
+            error = ex.StatusCode == HttpStatusCode.ServiceUnavailable
+                ? "Master CV storage is unavailable. Check SQL Server and the profile migration."
+                : ex.Message;
+        }
+        catch (Exception)
+        {
+            error = "The reviewed import could not be saved.";
+        }
+        finally
+        {
+            busy = false;
+        }
+    }
+
+    private void Cancel()
+    {
+        preview = null;
+        version = null;
+        confirmed = false;
+        replaceProfessionalProfile = false;
+        error = null;
+    }
+
+    private static void EditName(CareerEvidenceForm item, string? name)
+    {
+        item.OriginalName = name ?? "";
+        item.Verification = Unverified;
+    }
+
+    private sealed record ImportPreview(CandidateProfileForm Profile, List<string> Conflicts, ParsingDiagnostics? Diagnostics);
+    private sealed record ParsingDiagnostics(List<string> MainSections, int EmploymentRecords, int ProjectCount,
+        bool ProfessionalProfileExtracted, int CoreStrengthsCount, int TechnicalSkillsCount, List<int> EmployerTechnologyCounts,
+        int UnrecognizedSectionCount, int SectionsNeedingReview);
+}

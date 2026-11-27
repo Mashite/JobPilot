@@ -18,14 +18,26 @@ internal static class Program
                 builder.Configuration.GetConnectionString(
                     "JobPilotDatabase")));
 
-        builder.Services.AddSingleton<CandidateProfileService>();
+        builder.Services.AddScoped(services => new CandidateProfileService(
+            services.GetRequiredService<IWebHostEnvironment>(), services.GetRequiredService<IConfiguration>(),
+            services.GetRequiredService<SkillNormalizer>(), services.GetRequiredService<JobPilotDbContext>()));
         builder.Services.AddSingleton<SkillNormalizer>();
+        builder.Services.AddScoped<MasterCvImporter>();
+        builder.Services.AddScoped<MasterCvMerge>();
         builder.Services.AddScoped<JobMatchingService>();
+        builder.Services.AddScoped<CandidateEvaluationService>();
+        builder.Services.AddScoped<ExperienceDiscoveryService>();
+        builder.Services.AddScoped<SemanticJobMatcher>();
+        builder.Services.AddSingleton<SemanticMatchCache>();
+        builder.Services.AddScoped<JobMatchReviewStore>();
         builder.Services.AddScoped<CandidateProfileValidator>();
         builder.Services.AddScoped<WordDocumentService>();
         builder.Services.AddScoped<JobAnalysisService>();
+        builder.Services.AddSingleton<JobRequirementCache>();
         builder.Services.AddScoped<ResumeGeneratorService>();
         builder.Services.AddScoped<JobPilotAgentService>();
+        builder.Services.AddScoped<AgentWorkflowService>();
+        builder.Services.AddSingleton<AgentWorkflowGate>();
         builder.Services.AddJobPilotAi(builder.Configuration);
 
         // Add services to the container.
@@ -51,7 +63,10 @@ internal static class Program
         }
 
         app.MapJobPilotEndpoints();
+        app.MapAgentWorkflows();
+        app.MapCandidateIntelligence();
         app.MapProfileEndpoints();
+        app.MapMasterCvImport();
         app.MapSkillReviewEndpoints();
         app.MapJobApplicationEndpoints();
 

@@ -1,0 +1,273 @@
+@page "/candidate-intelligence"
+@rendermode InteractiveServer
+@inject IHttpClientFactory Clients
+
+<PageTitle>Candidate Intelligence - JobPilot</PageTitle>
+
+<div class="page-intro">
+    <h2>Candidate Intelligence</h2>
+    <p>Review capabilities supported by your Master CV and confirm experience that needs more detail.</p>
+    <a href="master-cv">Open Master CV</a>
+</div>
+
+<div class="page-stack">
+    @if (error is not null)
+    {
+        <p class="alert alert-danger" role="alert">@error</p>
+    }
+    @if (notice is not null)
+    {
+        <p class="alert alert-success" role="status">@notice</p>
+    }
+    @if (busy)
+    {
+        <p role="status">Working on candidate intelligence…</p>
+    }
+    @if (view is not { } current)
+    {
+        <button type="button" class="btn btn-outline-primary" disabled="@busy" @onclick="Reload">Reload</button>
+    }
+    else
+    {
+        <section class="card card-body page-stack">
+            <h3>Career capabilities</h3>
+            @if (current.Intelligence is { } assessment)
+            {
+                <p>@assessment.Seniority</p>
+                @foreach (var group in assessment.Competencies.GroupBy(item => item.Category))
+                {
+                    <details>
+                        <summary>@group.Key</summary>
+                        @foreach (var competency in group)
+                        {
+                            <div class="actions-spaced">
+                                <strong>@competency.Name</strong> · @(competency.VerificationStatus == "user_confirmed"
+                                    ? "User confirmed" : StatusLabel(competency.AssessmentStatus))
+                                <p>@competency.Description</p>
+                                <ul>
+                                    @foreach (var evidence in competency.Evidence)
+                                    {
+                                        <li>@evidence.Employer @evidence.Project · @evidence.Excerpt</li>
+                                    }
+                                </ul>
+                            </div>
+                        }
+                    </details>
+                }
+            }
+            else
+            {
+                <p>@current.ProfessionalTitle</p>
+                <p>Evaluate the latest saved Master CV to see capabilities and supporting evidence.</p>
+                <button type="button" class="btn btn-primary" disabled="@busy" @onclick="Evaluate">Evaluate Master CV</button>
+            }
+            @if (current.UserConfirmed.Count > 0)
+            {
+                <details>
+                    <summary>User-confirmed experience (@current.UserConfirmed.Count)</summary>
+                    <ul>
+                        @foreach (var evidence in current.UserConfirmed)
+                        {
+                            <li>
+                                <strong>@evidence.Name</strong> @evidence.Employer @evidence.Project · @evidence.SourceExcerpt
+                                @if (evidence.ExperienceScope is { } scope)
+                                {
+                                    <small> · @LevelLabel(scope)</small>
+                                }
+                            </li>
+                        }
+                    </ul>
+                </details>
+            }
+        </section>
+
+        <section class="card card-body page-stack">
+            <h3>Experience discovery</h3>
+            <label><input type="checkbox" @bind="showAnswered" /> Review previously answered questions</label>
+            @foreach (var group in current.Questions.Where(item => showAnswered || item.Answer is null || drafts.ContainsKey(item.Skill))
+                .GroupBy(item => item.Group))
+            {
+                <details>
+                    <summary>@group.Key (@group.Count())</summary>
+                    @foreach (var question in group)
+                    {
+                        <div class="actions-spaced">
+                            <button class="btn btn-outline-primary" type="button" disabled="@busy"
+                                    @onclick="() => Edit(question)">@question.Skill</button>
+                            @if (question.Answer is { } answer && !drafts.ContainsKey(question.Skill))
+                            {
+                                <span class="text-muted">@LevelLabel(answer.Level)</span>
+                            }
+                            @if (drafts.TryGetValue(question.Skill, out var draft))
+                            {
+                                <fieldset disabled="@busy" class="page-stack">
+                                    <legend>@question.Skill</legend>
+                                    <label>Experience level
+                                        <select class="form-select" @bind="draft.Level">
+                                            <option value="">Select experience level</option>
+                                            @foreach (var level in Levels)
+                                            {
+                                                <option value="@level">@LevelLabel(level)</option>
+                                            }
+                                        </select>
+                                    </label>
+                                    <label>Supporting explanation
+                                        <textarea class="form-control" maxlength="1000" rows="2" @bind="draft.Explanation"></textarea>
+                                    </label>
+                                    @if (draft.Level == "professional")
+                                    {
+                                        <label>Employer
+                                            <select class="form-select" @bind="draft.Employer">
+                                                <option value="">Choose an employer (optional)</option>
+                                                @foreach (var employer in current.Employers)
+                                                {
+                                                    <option value="@employer">@employer</option>
+                                                }
+                                            </select>
+                                        </label>
+                                    }
+                                    @if (draft.Level is "professional" or "personal_project")
+                                    {
+                                        <label>Project
+                                            <select class="form-select" @bind="draft.Project">
+                                                <option value="">Choose a project (optional)</option>
+                                                @foreach (var project in current.Projects)
+                                                {
+                                                    <option value="@project">@project</option>
+                                                }
+                                            </select>
+                                        </label>
+                                    }
+                                    <button type="button" class="btn btn-outline-primary" @onclick="() => drafts.Remove(question.Skill)">Cancel answer</button>
+                                </fieldset>
+                            }
+                        </div>
+                    }
+                </details>
+            }
+            @if (drafts.Count > 0)
+            {
+                <label><input type="checkbox" @bind="confirmed" disabled="@busy" /> I confirm the selected answers</label>
+                <button type="button" class="btn btn-primary" disabled="@(busy || !confirmed || drafts.Values.Any(item => item.Level.Length == 0))"
+                        @onclick="Save">Save @drafts.Count answers</button>
+            }
+        </section>
+    }
+</div>
+
+@code {
+    private static readonly string[] Levels = ["professional", "personal_project", "familiar", "learning", "none"];
+    private readonly Dictionary<string, Answer> drafts = new(StringComparer.OrdinalIgnoreCase);
+    private CandidateView? view;
+    private string? error, notice;
+    private bool busy, confirmed, showAnswered;
+
+    protected override Task OnInitializedAsync() => Reload();
+    private Task Reload() => Execute(async client => await Load(client));
+    private Task Evaluate() => Execute(async client =>
+    {
+        using var request = MakeRequest(HttpMethod.Post, "/evaluate");
+        using var response = await client.SendAsync(request);
+        await response.EnsureJobPilotSuccessAsync();
+        await Load(client);
+        notice = "Candidate evaluation saved.";
+    });
+
+    private Task Save() => Execute(async client =>
+    {
+        using var request = MakeRequest(HttpMethod.Post, "/discovery");
+        request.Content = JsonContent.Create(new { view!.ProfileVersion, Confirmed = confirmed, Answers = drafts.Values.ToArray() });
+        using var response = await client.SendAsync(request);
+        if (response.StatusCode == System.Net.HttpStatusCode.Conflict)
+        {
+            await Load(client);
+            confirmed = false;
+            error = "Master CV changed. Review your answers and confirm again.";
+            return;
+        }
+        await response.EnsureJobPilotSuccessAsync();
+        await Load(client);
+        drafts.Clear();
+        confirmed = false;
+        notice = "Confirmed answers saved.";
+    });
+
+    private async Task Load(HttpClient client)
+    {
+        using var request = MakeRequest(HttpMethod.Get, "");
+        using var response = await client.SendAsync(request);
+        await response.EnsureJobPilotSuccessAsync();
+        view = await response.Content.ReadFromJsonAsync<CandidateView>() ??
+            throw new InvalidOperationException("Candidate intelligence was unavailable.");
+    }
+
+    private async Task Execute(Func<HttpClient, Task> work)
+    {
+        if (busy)
+            return;
+        busy = true;
+        error = notice = null;
+        try
+        {
+            using var client = Clients.CreateClient("JobPilotApi");
+            await work(client);
+        }
+        catch (Exception ex) when (ex is HttpRequestException or InvalidOperationException or OperationCanceledException or System.Text.Json.JsonException)
+        {
+            error = ex is HttpRequestException { StatusCode: not null } ? ex.Message : "Candidate intelligence could not be loaded or saved.";
+        }
+        finally { busy = false; }
+    }
+
+    private static HttpRequestMessage MakeRequest(HttpMethod method, string route)
+    {
+        var request = new HttpRequestMessage(method, "api/profile/intelligence" + route);
+        request.Headers.Add("X-JobPilot-Profile-Write", "1");
+        return request;
+    }
+
+    private void Edit(Question question)
+    {
+        confirmed = false;
+        drafts.TryAdd(question.Skill, question.Answer is { } value ? new Answer
+        {
+            Skill = value.Skill, Group = value.Group, Level = value.Level, Employer = value.Employer,
+            Project = value.Project, Explanation = value.Explanation
+        } : new Answer { Skill = question.Skill, Group = question.Group });
+    }
+
+    private static string StatusLabel(string value) => value switch
+    {
+        "documented" => "Explicitly documented",
+        "semantic" => "Evidence-supported capability",
+        "transferable" => "Transferable",
+        _ => "Needs verification"
+    };
+
+    private static string LevelLabel(string value) => value switch
+    {
+        "professional" => "Professional experience",
+        "personal_project" => "Personal project experience",
+        "familiar" => "Familiar with the concept",
+        "learning" => "Currently learning",
+        _ => "No experience"
+    };
+
+    private sealed record CandidateView(string ProfileVersion, string ProfessionalTitle, Evaluation? Intelligence,
+        List<Question> Questions, List<string> Employers, List<string> Projects, List<ConfirmedEvidence> UserConfirmed);
+    private sealed record Evaluation(string Seniority, List<Competency> Competencies);
+    private sealed record Competency(string Name, string Category, string Description, string AssessmentStatus,
+        string VerificationStatus, List<Citation> Evidence);
+    private sealed record Citation(string? Employer, string? Project, string Excerpt);
+    private sealed record ConfirmedEvidence(string Name, string? Employer, string? Project, string SourceExcerpt, string? ExperienceScope);
+    private sealed record Question(string Group, string Skill, Answer? Answer);
+    private sealed class Answer
+    {
+        public string Skill { get; set; } = "";
+        public string Group { get; set; } = "";
+        public string Level { get; set; } = "";
+        public string? Explanation { get; set; }
+        public string? Employer { get; set; }
+        public string? Project { get; set; }
+    }
+}

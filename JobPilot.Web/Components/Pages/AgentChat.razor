@@ -9,6 +9,8 @@
 @inject IJSRuntime JS
 @inject AgentResumeDraftState ResumeDraftState
 @inject NavigationManager Navigation
+@inject ResumeWorkflow ResumeWorkflow
+@inject AgentConversationState Conversation
 
 <PageTitle>JobPilot AI Assistant</PageTitle>
 
@@ -53,6 +55,39 @@
             <article @key="message" class="chat-message @(isUser ? "user-message" : "assistant-message")">
                 <h4>@(isUser ? "You" : "Assistant")</h4>
                 <p class="message-content">@message.Content</p>
+                @if (message.Workflow is { } workflow)
+                {
+                    @if (workflow.Analysis is { } analysis)
+                    {
+                        <p><strong>@analysis.MatchScore% @(analysis.IsScoreProvisional ? "provisional match" : "match")</strong> · @analysis.Summary</p>
+                        @if (analysis.StrongestAreas is { Count: > 0 })
+                        {
+                            <p><strong>Strongest areas</strong> · @string.Join(", ", analysis.StrongestAreas)</p>
+                        }
+                        @if (analysis.GapHighlights is { Count: > 0 })
+                        {
+                            <p class="text-muted"><strong>Gaps or items to review</strong> · @string.Join(", ", analysis.GapHighlights)</p>
+                        }
+                        @if (analysis.PendingRequirements > 0)
+                        {
+                            <p class="text-muted">@analysis.PendingRequirements requirements await semantic evaluation. Retry unfinished work to continue.</p>
+                        }
+                        else if (analysis.Status == "partial")
+                        {
+                            <p class="text-muted">Some semantic requirements still need review.</p>
+                        }
+                        <a class="btn btn-outline-primary" href="@($"ai-assistant/analysis/{analysis.AnalysisId:D}")">View Job Analysis</a>
+                    }
+                    @if (workflow.Resume is { } savedResume)
+                    {
+                        <div class="actions">
+                            <button type="button" class="btn btn-primary" disabled="@(isSending || openingArtifact)"
+                                    @onclick="() => OpenWorkflowResume(savedResume, download: false)">Edit Resume</button>
+                            <button type="button" class="btn btn-outline-primary" disabled="@(isSending || openingArtifact)"
+                                    @onclick="() => OpenWorkflowResume(savedResume, download: true)">Download DOCX</button>
+                        </div>
+                    }
+                }
 
                 @if (message.Tools.Count > 0)
                 {
@@ -92,13 +127,13 @@
             </label>
             <textarea id="assistant-job-description" class="form-control" rows="3"
                       placeholder="Paste the job listing" @bind="jobDescription" @bind:event="oninput"
-                      disabled="@isSending"></textarea>
+                      maxlength="80000" disabled="@isSending"></textarea>
         </div>
         <div>
             <label class="form-label" for="assistant-message">User Message</label>
             <textarea id="assistant-message" class="form-control" rows="2" @ref="messageInput"
                       placeholder="Ask the assistant a question" @bind="userMessage" @bind:event="oninput"
-                      disabled="@isSending" required></textarea>
+                      maxlength="8000" disabled="@isSending" required></textarea>
         </div>
         <div class="actions">
             <button class="btn btn-primary" type="submit" disabled="@isSending">Send Message</button>
@@ -106,9 +141,17 @@
                 @if (isSending)
                 {
                     <span class="ui-spinner" aria-hidden="true"></span>
-                    <span>Waiting for the AI provider…</span>
+                    <span>@AgentWorkflowView.StageLabel(activeStage)…</span>
                 }
             </span>
+            @if (isSending)
+            {
+                <button class="btn btn-outline-primary" type="button" @onclick="CancelRun">Cancel</button>
+            }
+            else if (canRetry)
+            {
+                <button class="btn btn-outline-primary" type="button" @onclick="RetryWorkflow">Retry unfinished step</button>
+            }
         </div>
         @if (errorMessage is not null)
         {
@@ -126,7 +169,7 @@
     ];
 
     private static readonly JsonSerializerOptions IndentedJson = new() { WriteIndented = true };
-    private readonly List<ChatMessage> messages = [];
+    private List<ChatMessage> messages => Conversation.Messages;
     private readonly Dictionary<AgentToolResult, (AgentResumeResult Result, string? JobDescription)> resumeResults =
         new(ReferenceEqualityComparer.Instance);
     private readonly CancellationTokenSource pageLifetime = new();
@@ -134,9 +177,26 @@
     private ElementReference messageInput;
     private string jobDescription = "";
     private string userMessage = "";
-    private string? errorMessage;
+    private string? errorMessage
+    {
+        get => Conversation.Error;
+        set => Conversation.Error = value;
+    }
     private bool isSending;
     private bool scrollPending;
+    private CancellationTokenSource? currentRun;
+    private (Guid Id, AgentChatRequest Request)? lastWorkflow
+    {
+        get => Conversation.LastWorkflow;
+        set => Conversation.LastWorkflow = value;
+    }
+    private string? activeStage;
+    private bool canRetry
+    {
+        get => Conversation.CanRetry;
+        set => Conversation.CanRetry = value;
+    }
+    private bool openingArtifact;
 
     private bool HasChatState => messages.Count > 0 || jobDescription.Length > 0 ||
         userMessage.Length > 0 || errorMessage is not null;
@@ -162,18 +222,31 @@
         }
 
         var description = string.IsNullOrWhiteSpace(jobDescription) ? null : jobDescription.Trim();
-        var cancellationToken = pageLifetime.Token;
-        isSending = true;
-        errorMessage = null;
+        var input = new AgentChatRequest(message, description);
         userMessage = "";
         messages.Add(new ChatMessage("user", message, []));
         scrollPending = true;
+        if (description is not null)
+        {
+            lastWorkflow = (Guid.NewGuid(), input);
+            await RunWorkflow(lastWorkflow.Value);
+            return;
+        }
+
+        lastWorkflow = null;
+        canRetry = false;
+        activeStage = null;
+        using var run = CancellationTokenSource.CreateLinkedTokenSource(pageLifetime.Token);
+        currentRun = run;
+        var cancellationToken = run.Token;
+        isSending = true;
+        errorMessage = null;
 
         try
         {
             using var client = HttpClientFactory.CreateClient("JobPilotApi");
             using var response = await client.PostAsJsonAsync(
-                "api/agent/chat", new AgentChatRequest(message, description), cancellationToken);
+                "api/agent/chat", input, cancellationToken);
 
             await response.EnsureJobPilotSuccessAsync(cancellationToken);
 
@@ -202,16 +275,137 @@
         }
         catch (OperationCanceledException)
         {
-            if (!cancellationToken.IsCancellationRequested)
-                errorMessage = "The request timed out while waiting for the AI provider. Please try again.";
+            if (!pageLifetime.IsCancellationRequested)
+                errorMessage = run.IsCancellationRequested ? "Request canceled." : "The request timed out while waiting for the AI provider.";
         }
         finally
         {
             isSending = false;
+            currentRun = null;
             if (errorMessage is not null)
                 userMessage = message;
         }
     }
+
+    private Task RetryWorkflow() => !isSending && lastWorkflow is { } workflow ? RunWorkflow(workflow) : Task.CompletedTask;
+
+    private async Task RunWorkflow((Guid Id, AgentChatRequest Request) workflow)
+    {
+        using var run = CancellationTokenSource.CreateLinkedTokenSource(pageLifetime.Token);
+        using var progress = CancellationTokenSource.CreateLinkedTokenSource(run.Token);
+        currentRun = run;
+        isSending = true;
+        canRetry = false;
+        errorMessage = null;
+        activeStage = "intent";
+        var polling = PollProgress(workflow.Id, progress.Token);
+        try
+        {
+            using var client = HttpClientFactory.CreateClient("JobPilotApi");
+            using var request = AgentWorkflowClient.Request(HttpMethod.Post, workflow.Id);
+            request.Content = JsonContent.Create(workflow.Request);
+            using var response = await client.SendAsync(request, run.Token);
+            await response.EnsureJobPilotSuccessAsync(run.Token);
+            var result = await response.Content.ReadFromJsonAsync<AgentWorkflowView>(run.Token) ?? throw new JsonException();
+            activeStage = result.Stage;
+            canRetry = result.CanRetry;
+            if (result.Error is not null)
+                errorMessage = $"{AgentWorkflowView.StageLabel(result.Stage)}: {result.Error}";
+            if (result.Message is not null || result.Analysis is not null || result.Resume is not null)
+            {
+                var reply = new ChatMessage("assistant", result.Message ?? "Completed work is available below.", [], result);
+                var existing = messages.FindIndex(item => item.Workflow?.Id == result.Id);
+                if (existing < 0)
+                    messages.Add(reply);
+                else
+                    messages[existing] = reply;
+                scrollPending = true;
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            if (!pageLifetime.IsCancellationRequested)
+            {
+                canRetry = true;
+                errorMessage = run.IsCancellationRequested ? "Request canceled. You can retry unfinished work."
+                    : "The request timed out. You can retry unfinished work.";
+            }
+        }
+        catch (Exception ex) when (ex is HttpRequestException or JsonException)
+        {
+            canRetry = true;
+            errorMessage = ex switch
+            {
+                HttpRequestException { StatusCode: System.Net.HttpStatusCode.Conflict } => "This workflow is already running. Wait before retrying.",
+                HttpRequestException { StatusCode: not null } => ex.Message,
+                _ => "JobPilot could not read the workflow response."
+            };
+        }
+        finally
+        {
+            await progress.CancelAsync();
+            await polling;
+            currentRun = null;
+            isSending = false;
+        }
+    }
+
+    private async Task PollProgress(Guid id, CancellationToken cancellationToken)
+    {
+        using var client = HttpClientFactory.CreateClient("JobPilotApi");
+        using var timer = new PeriodicTimer(TimeSpan.FromMilliseconds(700));
+        try
+        {
+            while (await timer.WaitForNextTickAsync(cancellationToken))
+            {
+                using var request = AgentWorkflowClient.Request(HttpMethod.Get, id);
+                using var response = await client.SendAsync(request, cancellationToken);
+                if (response.IsSuccessStatusCode && await response.Content.ReadFromJsonAsync<AgentWorkflowView>(cancellationToken) is { } result &&
+                    result.Stage != activeStage)
+                {
+                    activeStage = result.Stage;
+                    await InvokeAsync(StateHasChanged);
+                }
+            }
+        }
+        catch (Exception ex) when (ex is OperationCanceledException or HttpRequestException or JsonException)
+        {
+            // The main response remains authoritative if the progress feed is interrupted.
+        }
+    }
+
+    private void CancelRun() => currentRun?.Cancel();
+
+    private async Task OpenWorkflowResume(AgentResumeSummary summary, bool download)
+    {
+        if (isSending || openingArtifact)
+            return;
+        openingArtifact = true;
+        errorMessage = null;
+        try
+        {
+            using var client = HttpClientFactory.CreateClient("JobPilotApi");
+            using var request = AgentWorkflowClient.Request(HttpMethod.Get, summary.ResumeId, "/resume");
+            using var response = await client.SendAsync(request, pageLifetime.Token);
+            await response.EnsureJobPilotSuccessAsync(pageLifetime.Token);
+            var artifact = await response.Content.ReadFromJsonAsync<ResumeArtifact>(pageLifetime.Token) ?? throw new JsonException();
+            if (download)
+                await ResumeWorkflow.DownloadAsync(client, artifact.Resume, pageLifetime.Token);
+            else
+                OpenResume(artifact.Resume, artifact.JobDescription);
+        }
+        catch (Exception ex) when (ex is HttpRequestException or JsonException or OperationCanceledException or JSException)
+        {
+            if (!pageLifetime.IsCancellationRequested)
+                errorMessage = "JobPilot could not open the saved resume draft.";
+        }
+        finally
+        {
+            openingArtifact = false;
+        }
+    }
+
+    private sealed record ResumeArtifact(GeneratedResume Resume, string? JobDescription);
 
     private void ClearChat()
     {
@@ -220,6 +414,8 @@
 
         messages.Clear();
         resumeResults.Clear();
+        lastWorkflow = null;
+        canRetry = false;
         jobDescription = "";
         userMessage = "";
         errorMessage = null;
